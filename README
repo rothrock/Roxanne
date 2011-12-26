@@ -1,0 +1,20 @@
+To build the software:
+
+$ make
+
+To install it:
+
+$ sudo make install 
+
+This will put the executables in /usr/local/bin
+Header file (client lib) goes into /usr/local/include
+The client lib (something.so) goes into /usr/local/lib
+
+To initialize or re-create the database files:
+
+$ sudo /usr/local/bin/dbr_ctl initdb [force]
+
+To start the db:
+
+$ sudo /usr/local/bin/dbr_ctl start
+

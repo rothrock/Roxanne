@@ -1,0 +1,67 @@
+#!/bin/bash
+
+BIN_DIR="/usr/local/bin"
+PID_DIR="/var/run"
+PORT='4080'
+HOST='localhost'
+RUN_AS_USER='nobody'
+RUN_AS_GRP='nobody'
+DB_PATH='/var/roxanne'
+
+FILES="block_bitmap idx db"
+
+function usage {
+    echo "Usage: $0 {start|stop|initdb [force]}"
+    echo "This is a run control script used to manage the Roxanne key-value store (dbr)."
+    exit 1
+}
+
+whoami=$(whoami)
+if [[ $whoami != "root" ]] 
+  then 
+    echo "You're not root"
+    usage
+fi
+
+case "$1" in
+  start)
+    
+    test ! -w  $PID_DIR &&  echo "Can't write to $PID_DIR" && exit 1
+    sudo -u $RUN_AS_USER  $BIN_DIR/dbr -d $DB_PATH -h $HOST -p $PORT 1>$PID_DIR/dbr.pid
+    ;;
+
+  stop)
+    test ! -e $PID_DIR/dbr.pid && echo "No pid file found." && exit 1
+    sudo -u $RUN_AS_USER kill $(<$PID_DIR/dbr.pid)        
+    sudo rm $PID_DIR/dbr.pid
+    ;;
+
+  initdb)
+
+    echo "Path to database files: $DB_PATH"
+
+    if [ "$2" != "force" ]
+      then
+        for i in $FILES
+          do
+            test -e $DB_PATH/$i && echo "$DB_PATH/$i exists. Use 'force' or remove the file yourself." && exit 1
+          done
+    fi
+
+    mkdir -p $DB_PATH 
+    chown $RUN_AS_USER:$RUN_AS_GRP $DB_PATH
+    sudo -u $RUN_AS_USER test ! -w $DB_PATH && echo "Can't write to $DB_PATH" && exit 1
+
+    sudo -u $RUN_AS_USER dd if=/dev/zero of=$DB_PATH/block_bitmap bs=1024 count=16384
+    sudo -u $RUN_AS_USER dd if=/dev/zero of=$DB_PATH/idx bs=1024 count=65536
+    sudo -u $RUN_AS_USER cat /dev/null >$DB_PATH/db
+    chown $RUN_AS_USER:$RUN_AS_GRP $DB_PATH/db
+  
+    ;;
+
+  *)
+    usage
+    ;;
+
+esac
+

@@ -114,9 +114,9 @@ int             IDX_FD;
 
 int main(int argc, char* argv[]) {
 
-  struct sockaddr incoming;                 // Contains info about the client connecting to us.
+  struct sockaddr incoming;
   socklen_t addr_size = sizeof(incoming); 
-  int listen_fd, accept_fd;                 // File descriptor sets for listening, accepting conns, and communicating.
+  int listen_fd, accept_fd;
   char* port = "4080";
   char* host = "::1";
   char db_file[4096] = "/var/roxanne/db";
@@ -125,8 +125,8 @@ int main(int argc, char* argv[]) {
   int chld;
   int shm_block_offset_id;
   key_t shm_block_offset_key = 1;
-  int i; // iterator
-  int ch; //getopt
+  int i;
+  int ch;
 
 
   // parse our cmd line args
@@ -296,7 +296,7 @@ void cleanup_and_exit() {
 }
 
 int start_listening(char* port, int backlog) {
-  int listen_fd;                            // File descriptor sets for listening, accepting conns, and communicating.
+  int listen_fd;
   struct addrinfo hints, *res, *p;          // Parms for socket() and bind() calls.
   int yes=1;
   int rc;

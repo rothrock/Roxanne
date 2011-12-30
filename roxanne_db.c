@@ -20,86 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
-#include <errno.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/select.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/ipc.h>
-#include <sys/shm.h>
-#include <sys/mman.h>
-#include <semaphore.h>
-#include <math.h>
-#include <stdbool.h>
-#include "longlong.h"
-#include "fnv.h"
-
-/*
-  Here is the order for setting up a networked connection:
-  socket()
-  bind()
-  listen()
-  accept()
-*/
-
-// Stuff for .h
-
-// Constants -n- Macros
-#define BACKLOG 25
-#define BLOCK_SIZE 4096
-#define MAX_BLOCKS 134217728
-#define BLOCK_BITMAP_BYTES 16777216
-#define MSG_SIZE 65536
-#define HASH_BITS 16
-#define IDX_ENTRY_SIZE 1024
-#define KEY_LEN (IDX_ENTRY_SIZE - 3*(sizeof(int)))
-
-
-struct idx { // structure for an index record.
-  char      key[KEY_LEN];
-  int       block_offset; // starting block in the db file.
-  int       length;       // db blocks consumed.
-  int       next;         // overflow ptr to next index_record on disk.
-};
-
-
-struct  db_ptr { // a structure that points to a value in the db file.
-  int block_offset;
-  int blocks;
-};
-
-
-// Function signatures
-int       start_listening(char* port, int backlog);
-void      sigchld_handler(int s);
-void      sigterm_handler_parent(int s);
-void      sigterm_handler_child(int s);
-int       get_hash_val(int bits, char* key);
-int       guts(int accept_fd, int listen_fd);
-int       extract_command(char* msg, int msglen);
-int       write_record(char* key, char* data);
-int       write_index(char* key, int block_offset, int length);
-int       parse_create(char msg[], int msglen, char** key, char** value);
-int       bit_array_set(char bit_array[], int bit);
-int       bit_array_test(char bit_array[], int bit);
-int       bit_array_clear(char bit_array[], int bit);
-int       find(char* key);
-int       create_block_reservation(int blocks_needed);
-char*     read_record(struct db_ptr db_rec);
-void      hash_write_lock(int hash_number);
-void      hash_write_unlock(int hash_number);
-void      cleanup_and_exit();
-void      usage(char *argv);
-
+#include "roxanne_db.h"
 
 // Globals
 sem_t*          DB_WRITE_LOCK;
@@ -123,8 +44,8 @@ int main(int argc, char* argv[]) {
   char idx_file[4096] = "/var/roxanne/idx";
   char block_bitmap_file[4096] = "/var/roxanne/block_bitmap";
   int chld;
-  int shm_block_offset_id;
-  key_t shm_block_offset_key = 1;
+  //int shm_block_offset_id;
+  //key_t shm_block_offset_key = 1;
   int i;
   int ch;
 
@@ -202,7 +123,7 @@ int main(int argc, char* argv[]) {
   }
   
   if ((SHM_HASHBUCKET_BITMAP = mmap((caddr_t)0, ((1<<HASH_BITS)/8), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0)) == MAP_FAILED) {
-    perror("Problem mmapping the hasj bitmap");
+    perror("Problem mmapping the hash bitmap");
     exit(-1);
   }
   
@@ -337,16 +258,16 @@ int start_listening(char* port, int backlog) {
 
 int extract_command(char* msg, int msglen) {
 
-  char* commands[4] = { "create: ",           // 0
-                        "read: ",             // 1
-                        "delete: "};          // 2
+  char* commands[3] = { "create ",           // 0
+                        "read ",             // 1
+                        "delete "};          // 2
   int i = 0;
   int cmdlen;
   int max_chars = 0;
   for (; i < 3; i++) {
     cmdlen = strlen(commands[i]);
     max_chars = msglen < cmdlen ? msglen : cmdlen;
-    if (strncmp(commands[i], msg, max_chars) == 0) return(i);
+    if (memcmp(commands[i], msg, max_chars) == 0) return(i);
   }
   
   return(-1);
@@ -402,11 +323,11 @@ int create_block_reservation(int blocks_needed) {
 
 struct db_ptr find_db_ptr(char* key) {
   // returns an offset in the index for the given key.
-  int     hash_id = get_hash_val(HASH_BITS, key);
-  struct  idx index_rec = {};
-  struct  db_ptr db_rec = {.block_offset = -1, .blocks = -1};
-  int     result;
-  int     pos  = hash_id * IDX_ENTRY_SIZE;
+  int       hash_id = get_hash_val(HASH_BITS, key);
+  struct    idx index_rec = {};
+  struct    db_ptr db_rec = {.block_offset = -1, .blocks = -1};
+  int       result;
+   int64_t  pos  = hash_id * IDX_ENTRY_SIZE;
 
   while (1) {
 
@@ -418,11 +339,11 @@ struct db_ptr find_db_ptr(char* key) {
     }
 
     if (result < IDX_ENTRY_SIZE) { // Somehow the read failed.
-      perror("index read failed in function find");
+      perror("index read failed in function find_db_ptr");
       return db_rec;
     } 
 
-    if ((strncmp(key, index_rec.key, KEY_LEN - 1)) == 0)  {// found a match
+    if ((memcmp(key, index_rec.key, KEY_LEN)) == 0)  {// found a match
       db_rec.block_offset = index_rec.block_offset;
       db_rec.blocks = index_rec.length;
       return db_rec;
@@ -436,10 +357,10 @@ struct db_ptr find_db_ptr(char* key) {
 
 int find(char* key) {
   // returns an offset in the index for the given key.
-  int     hash_id = get_hash_val(HASH_BITS, key);
-  struct  idx index_rec = {};
-  int     result;
-  int     pos  = hash_id * IDX_ENTRY_SIZE;
+  int       hash_id = get_hash_val(HASH_BITS, key);
+  struct    idx index_rec = {};
+  int       result;
+   int64_t  pos  = hash_id * IDX_ENTRY_SIZE;
 
   while (1) {
 
@@ -455,7 +376,7 @@ int find(char* key) {
       return -1;
     } 
 
-    if ((strncmp(key, index_rec.key, KEY_LEN - 1)) == 0)  return pos; // found
+    if ((memcmp(key, index_rec.key, KEY_LEN)) == 0)  return pos; // found
 
     if ((pos = index_rec.next) == 0) return -2; // no next record.
 
@@ -466,12 +387,12 @@ int find(char* key) {
   
 int write_index(char* key, int block_offset, int length) {
 
-  int       hash_id = get_hash_val(HASH_BITS, key);
-  struct    idx index_rec = {};
-  struct    idx* index_rec_ptr;
-  int       result;
-  int       pos  = hash_id * IDX_ENTRY_SIZE;
-  int       find_results = find(key);
+  int         hash_id = get_hash_val(HASH_BITS, key);
+  struct      idx index_rec = {};
+  struct      idx* index_rec_ptr;
+  int         result;
+   int64_t    pos  = hash_id * IDX_ENTRY_SIZE;
+  int         find_results = find(key);
 
   index_rec_ptr = &index_rec;
 
@@ -525,7 +446,6 @@ int write_index(char* key, int block_offset, int length) {
       index_rec.next = lseek(IDX_FD, 0, SEEK_END);
       pwrite(IDX_FD, (void*)index_rec_ptr, IDX_ENTRY_SIZE, pos); // update current rec with pointer to next.
       pos = index_rec.next;
-      fprintf(stderr, "pos is %d\n", pos);
       index_rec.next = 0;
       index_rec.block_offset = block_offset;
       index_rec.length = length;
@@ -544,10 +464,10 @@ int write_index(char* key, int block_offset, int length) {
 
 char* read_record(struct db_ptr db_rec) {
   // read a record from the db file at the given offset.
-  char* buffer;
-  int byte_count = db_rec.blocks * BLOCK_SIZE;
-  int byte_offset = db_rec.block_offset * BLOCK_SIZE;
-  int bytes_read = 0;
+  char*     buffer;
+  int       byte_count = db_rec.blocks * BLOCK_SIZE;
+   int64_t  byte_offset = db_rec.block_offset * BLOCK_SIZE;
+  int       bytes_read = 0;
 
   // Make a temporary buffer that is at least as big as the
   // data payload that we need to read. The buffer will be
@@ -574,8 +494,8 @@ int delete_record(char* key) {
   void*       buffer;
   int         byte_count = 0;
   int         block_offset;
-  int         byte_offset;
-  int         pos = 0;
+   int64_t    byte_offset;
+   int64_t    pos = 0;
   int         result;
   struct idx  index_rec;
   int         hash_id = get_hash_val(HASH_BITS, key);
@@ -585,19 +505,27 @@ int delete_record(char* key) {
   hash_write_lock(hash_id);
 
   pos = find(key);
-  if (pos <= 0) {
-    fprintf(stderr, "Call to find() failed with %d.\n", pos);
+  if (pos == -1) {
+    fprintf(stderr, "Call to find() failed with %lld.\n", pos);
+    hash_write_unlock(hash_id);
     return(-1);
   }
-  
+
+  if (pos == -2) {
+    hash_write_unlock(hash_id);
+    return(-1); // Not in the index
+  }
+
   // Fetch the index record so we can find the blocks to delete
   result = pread(IDX_FD, (void*)&index_rec, IDX_ENTRY_SIZE, pos);
   if (result == 0) {
     fprintf(stderr, "EOF encoutered unexpectedly.\n");
+    hash_write_unlock(hash_id);
     return(-1);
   }
   if (result < IDX_ENTRY_SIZE) { // Somehow the read failed.
     perror("index read failed in function delete_record");
+    hash_write_unlock(hash_id);
     return(-1);
   }
 
@@ -639,7 +567,7 @@ int write_record(char* key, char* value) {
   void*     buffer;
   int       byte_count = 0;
   int       block_offset;
-  int       byte_offset;
+   int64_t  byte_offset;
   int       index_result;
   int       hash_id = get_hash_val(HASH_BITS, key); 
   
@@ -701,18 +629,20 @@ int write_record(char* key, char* value) {
 
 int guts(int accept_fd, int listen_fd) {
   
-  char buffer[512]      = "";   // recv buffer
-  char msg[MSG_SIZE]    = "";   // Holds our incoming and outgoing messages.
+  char buffer[512]        = "";   // recv buffer
+  char msg[MSG_SIZE]      = "";   // Holds our incoming and outgoing messages.
   void *msg_cursor;
-  char response[MSG_SIZE]   = "";   
-  int msglen            = 0;    // length of the assembled message that we receive.
-  int recvlen           = 0;    // how many bytes recv call returns.
-  int responselen       = 0;   
-  int length            = 0;
-  char* key;
-  char* value;
-  char* cmd_offset;
-  struct db_ptr db_rec;
+  char response[MSG_SIZE] = "";   
+  int msglen              = 0;    // length of the assembled message that we receive.
+  int recvlen             = 0;    // how many bytes recv call returns.
+  int responselen         = 0;   
+  //int length            = 0;
+  //char key[KEY_LEN];
+  //char* value;
+  //char* part;
+  //char* previous_part;
+  //char* cmd_offset;
+  //struct db_ptr db_rec;
   int retval;
     
 
@@ -756,68 +686,28 @@ int guts(int accept_fd, int listen_fd) {
 
       memcpy(msg_cursor, (void*)buffer, recvlen);
       msg_cursor += recvlen;
-      if (memchr((void*)buffer, '\0', recvlen)) break; // Got a terminator character. Go process our message.
+      if (memchr((void*)buffer, '\r', recvlen)) break; // Got a terminator character. Go process our message.
+      if (memchr((void*)buffer, '\n', recvlen)) break; // Got a terminator character. Go process our message.
 
     } 
-        
+    
+    //length = 0;
+    //part = NULL;
+    //previous_part = NULL;    
+    //key[0] = '\0';
+
     switch (extract_command(msg, msglen))  {
+
       case 0: // create
-        cmd_offset = &(msg[8]); // move beyond c-r-e-a-t-e-:-[space]
-        key = strsep(&cmd_offset, "&");
-        if ((cmd_offset == NULL) || (*key == '\0')) {
-          sprintf(response, "Failed to extract key.\n");
-          break;
-        }
-
-        if ((length = strnlen(key, KEY_LEN)) >= KEY_LEN) {
-          sprintf(response, "Key exceeds %lu bytes.\n", KEY_LEN);
-          break;
-        }
-
-        value = key + length + 1;
-        if (*value == '\0') {
-          sprintf(response, "No value supplied\n");
-          break;
-        }
-
-        retval = write_record(key, value);
-        if (retval == 0) {
-          sprintf(response, "Write OK.\n", key, value);
-        } else if (retval == -2) { // key already exists.
-          sprintf(response, "Write failed. Key exists in the index.\n", key, value);
-        } else {
-          sprintf(response, "write_record() failed. Don't know why. key = %s value = %s\n", key, value);
-        }
+        create_command(msg, response);
         break;
 
       case 1: // read
-        key = &(msg[6]); // move beyond r-e-a-d-:[space]
-        if (*key == '\0') {
-          sprintf(response, "No key supplied\n");
-          break;
-        }
-        db_rec = find_db_ptr(key); 
-        if (db_rec.block_offset != -1) {
-          value = read_record(db_rec);
-          sprintf(response, "%s", value);
-          free(value);
-        } else {
-          sprintf(response, "Not found.\n");
-        }
+        read_command(msg, response);
         break;
 
-      case 2:
-        sprintf(response, "Got a delete command.\n");
-        key = &(msg[8]); // move beyond d-e-l-e-t-e-:[space]
-        if (*key == '\0') {
-          sprintf(response, "No key supplied\n");
-          break;
-        }
-        if (delete_record(key) == 0) {
-          sprintf(response, "Delete OK.\n");
-        } else {
-          sprintf(response, "Delete failed.\n");
-        } 
+      case 2: // delete
+        delete_command(msg, response);
         break;
 
       default:
@@ -894,6 +784,117 @@ void hash_write_unlock(int hash_number) {
 
 }
 
+void create_command(char msg[], char response[]) {
+
+  int length            = 0;
+  char* part            = NULL;
+  char* previous_part   = NULL;
+  int retval            = 0;
+  char key[KEY_LEN]     = "";
+
+  if ((part = strtok(msg, "/")) == NULL) {
+    sprintf(response, "Missing key.\n");
+    return;
+  }
+  for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
+    if (previous_part != NULL) {
+      length += strlen(previous_part);
+      if (length > KEY_LEN - 1) {
+        sprintf(response, "Key too large.\n");
+        return;
+      }
+      strcat(key, previous_part);
+    }
+    previous_part = part;
+  } 
+
+  if (key[0] == '\0') {
+    sprintf(response, "Failed to get value.\n");
+    return;
+  }
+
+  retval = write_record(key, previous_part);
+  if (retval == 0) {
+    sprintf(response, "Write OK.\n");
+  } else if (retval == -2) { // key already exists.
+    sprintf(response, "Write failed. Key exists in the index.\n");
+  } else {
+    sprintf(response, "write_record() failed. Don't know why.\n");
+  }
+
+}
+
+void read_command(char msg[], char response[]) {
+
+  char* part            = NULL;
+  char* value;
+  int retval            = 0;
+  char key[KEY_LEN]     = "";
+  int length            = 0;
+  struct  db_ptr db_rec;
+
+  if ((part = strtok(msg, "/")) == NULL) {
+    sprintf(response, "Missing key.\n");
+    return;
+  }
+  for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
+    length += strlen(part);
+    if (length > KEY_LEN - 1) {
+      sprintf(response, "Key too long.\n");
+      part = NULL;
+      break;
+    }
+    strcat(key, part);
+  } 
+
+  if (length == 0) {
+    sprintf(response, "Failed to extract key.\n");
+    return;
+  }
+
+  db_rec = find_db_ptr(key); 
+  if (db_rec.block_offset != -1) {
+    value = read_record(db_rec);
+    sprintf(response, "%s\n", value);
+    free(value);
+  } else {
+    sprintf(response, "Not found.\n");
+  }
+
+}
+
+void delete_command(char msg[], char response[]) {
+
+  char* part            = NULL;
+  char key[KEY_LEN]     = "";
+  int length            = 0;
+ 
+  if ((part = strtok(msg, "/")) == NULL) {
+    sprintf(response, "Missing key.\n");
+    return;
+  }
+  for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
+    length += strlen(part);
+    if (length > KEY_LEN - 1) {
+      sprintf(response, "Key too long.\n");
+      part = NULL;
+      break;
+    }
+    strcat(key, part);
+  } 
+
+  if (length == 0) {
+    sprintf(response, "Failed to extract key.\n");
+    return;
+  }
+
+  if (delete_record(key) == 0) {
+    sprintf(response, "Delete OK.\n");
+  } else {
+    sprintf(response, "Delete failed.\n");
+  } 
+
+}
 
 void usage(char *argv) {
   fprintf(stderr, "usage: %s [-h listen_addr] [-p listen_port] [-d /path/to/db/directory]\n", argv);

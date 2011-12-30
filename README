@@ -7,8 +7,6 @@ To install it:
 $ sudo make install 
 
 This will put the executables in /usr/local/bin
-Header file (client lib) goes into /usr/local/include
-The client lib (something.so) goes into /usr/local/lib
 
 To initialize or re-create the database files:
 
@@ -18,36 +16,57 @@ To start the db:
 
 $ sudo /usr/local/bin/dbr_ctl start
 
-Look at the top of the dbr_ctl script for some initialization variables you might want to change.
+Look at the top of the dbr_ctl script for some initialization variables you
+ might want to change.
 
 --------------
 Precis
 --------------
-Roxanne is a very simple database server that allows a client to store and retrieve values by key. 
-Keys are stored in a hash map of 64K buckets. Hash collisions are resolved by separate chaining onto
-linked lists at the end of the index file. The default location for the index file is in
+Roxanne is a very simple database server that allows a client to store and 
+retrieve values by key.  Keys are stored in a hash map of 64K buckets. 
+Hash collisions are resolved by separate chaining onto linked lists at the 
+end of the index file. The default location for the index file is in
 /var/roxanne/idx
 
-The values for the given keys are stored in contiguous 4KB blocks in the database file (/var/roxanne/db). 
-A file called block_bitmap tracks the free/busy blocks in the db file. The dbr processes memory-map this file 
-for very fast access. The db file starts out with zero blocks. Blocks are only added as needed to 
-accomodate new records. Constants in the code limit the number of blocks to 134,217,728. This means that
-a single Roxanne database instance can store at most this many records.
-
+The values for the given keys are stored in contiguous 4KB blocks in the 
+database file (/var/roxanne/db).  A file called block_bitmap tracks the 
+free/busy blocks in the db file. The dbr processes memory-map this file 
+for very fast access. The db file starts out with zero blocks. 
+Blocks are only added to the db file as needed to accomodate new records. 
+As typically built, the database can accomodate about a billion blocks.
 
 --------------
 Example
 --------------
 madison:Roxanne rothrock$ sudo dbr_ctl start
-Password:
 Started listening.
 madison:Roxanne rothrock$ telnet localhost 4080
 Trying ::1...
 Connected to localhost.
 Escape character is '^]'.
-create: roxanne&A black, German Shepherd mix, about 50#, very smart and very emotional^@
+create /alpha/The first record
 Write OK.
-read: roxanne^@
-A black, German Shepherd mix, about 50#, very smart and very emotional
+read /alpha
+The first record
+create /alpha/beta/record
+Write OK.
+read /alpha/beta
+record
+delete /alpha
+Delete OK.
+read /alpha
+Not found.
+read /alpha/beta
+record
+
+--------------
+Protocol
+--------------
+commands:
+  create /key[/key/key/key...]/value<newline>
+
+  read  /key[/key/key/key...]
+
+  delete  /key[/key/key/key...]
 
 

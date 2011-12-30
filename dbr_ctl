@@ -11,7 +11,7 @@ DB_PATH='/var/roxanne'
 FILES="block_bitmap idx db"
 
 function usage {
-    echo "Usage: $0 {start|stop|initdb [force]}"
+    echo "Usage: $0 {start|stop|kill|initdb [force]}"
     echo "This is a run control script used to manage the Roxanne key-value store (dbr)."
     exit 1
 }
@@ -31,10 +31,16 @@ case "$1" in
     ;;
 
   stop)
-    test ! -e $PID_DIR/dbr.pid && echo "No pid file found." && exit 1
+    test ! -e $PID_DIR/dbr.pid && echo "No pid file found. Try 'sudo dbr_ctl kill' instead" && exit 1
     sudo -u $RUN_AS_USER kill $(<$PID_DIR/dbr.pid)        
     sudo rm $PID_DIR/dbr.pid
     ;;
+
+  kill)
+    sudo killall -u $RUN_AS_USER dbr
+    sudo rm $PID_DIR/dbr.pid &>/dev/null
+    ;;
+
 
   initdb)
 
@@ -52,7 +58,7 @@ case "$1" in
     chown $RUN_AS_USER:$RUN_AS_GRP $DB_PATH
     sudo -u $RUN_AS_USER test ! -w $DB_PATH && echo "Can't write to $DB_PATH" && exit 1
 
-    sudo -u $RUN_AS_USER dd if=/dev/zero of=$DB_PATH/block_bitmap bs=1024 count=16384
+    sudo -u $RUN_AS_USER dd if=/dev/zero of=$DB_PATH/block_bitmap bs=1024 count=131072
     sudo -u $RUN_AS_USER dd if=/dev/zero of=$DB_PATH/idx bs=1024 count=65536
     sudo -u $RUN_AS_USER cat /dev/null >$DB_PATH/db
     chown $RUN_AS_USER:$RUN_AS_GRP $DB_PATH/db

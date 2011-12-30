@@ -1,8 +1,12 @@
 
+OS := $(shell uname)
+ifeq (${OS},Linux)
+	libs = -lrt -lm
+endif
 default: dbr
 
 dbr: roxanne_db.c
-	gcc -Werror -g hash_32.c roxanne_db.c -o dbr
+	gcc -Werror -g hash_32.c roxanne_db.c -o dbr $(libs)
 	chmod 755 dbr
 
 .PHONY: clean

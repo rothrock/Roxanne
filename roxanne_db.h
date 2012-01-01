@@ -82,7 +82,7 @@ struct  db_ptr { // a structure that points to a value in the db file.
 
 
 // Function signatures
-int       start_listening(char* port, int backlog);
+int       start_listening(char* host, char* port, int backlog);
 void      sigchld_handler(int s);
 void      sigterm_handler_parent(int s);
 void      sigterm_handler_child(int s);

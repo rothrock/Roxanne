@@ -65,7 +65,7 @@ int main(int argc, char* argv[]) {
         break;
 
       case 'p':
-        port=optarg;
+        port = optarg;
         break;
 
      case '?':
@@ -152,7 +152,7 @@ int main(int argc, char* argv[]) {
   if ((chld = fork()) != 0 ) {printf("%d\n",chld); return(0);};
 
   // Start listening
-  if ((listen_fd = start_listening(port, BACKLOG)) == -1) {
+  if ((listen_fd = start_listening(host, port, BACKLOG)) == -1) {
     fprintf(stderr, "Call to start_listening failed\n");
     perror(NULL);
     exit(-1);
@@ -216,7 +216,7 @@ void cleanup_and_exit() {
   exit(0);
 }
 
-int start_listening(char* port, int backlog) {
+int start_listening(char* host, char* port, int backlog) {
   int listen_fd;
   struct addrinfo hints, *res, *p;          // Parms for socket() and bind() calls.
   int yes=1;
@@ -227,7 +227,7 @@ int start_listening(char* port, int backlog) {
   hints.ai_socktype = SOCK_STREAM;  // Normal TCP/IP reliable, buffered I/O.
 
   // Use getaddrinfo to allocate and populate *res.
-  if (rc = getaddrinfo("::1", port, &hints, &res) != 0) { // Flesh out res. We use *res to supply the needed args to socket() and bind().
+  if (rc = getaddrinfo(host, port, &hints, &res) != 0) { // Flesh out res. We use *res to supply the needed args to socket() and bind().
     fprintf(stderr, "The getaddrinfo() call failed with %d\n", rc);
     return(-1);
   }
@@ -236,12 +236,12 @@ int start_listening(char* port, int backlog) {
     // Make a socket using the fleshed-out res structure:
     if ((listen_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
       fprintf(stderr, "The socket call failed\n");
-      continue;
+      return(-1);
     }
     // Bind the file descriptor to the port we passed in to getaddrinfo():
     if (bind(listen_fd, res->ai_addr, res->ai_addrlen) == -1) {
       fprintf(stderr, "The bind() call failed. listen_fd is %d\n", listen_fd);
-      continue;
+      return(-1);
     }
     break; //We successfully bound to something. Stop looping.
   }
@@ -505,6 +505,7 @@ int delete_record(char* key) {
   hash_write_lock(hash_id);
 
   pos = find(key);
+
   if (pos == -1) {
     fprintf(stderr, "Call to find() failed with %lld.\n", pos);
     hash_write_unlock(hash_id);
@@ -513,7 +514,7 @@ int delete_record(char* key) {
 
   if (pos == -2) {
     hash_write_unlock(hash_id);
-    return(-1); // Not in the index
+    return(-2); // Not in the index
   }
 
   // Fetch the index record so we can find the blocks to delete
@@ -547,7 +548,7 @@ int delete_record(char* key) {
   
   // write the zeros to the appropriate location in our file.
   if ((pwrite(DB_FD, buffer, byte_count, byte_offset)) == -1) {
-    perror("pwrite failed in write_record");
+    perror("pwrite failed in delete_record");
     free(buffer);
     return(-1);
   }
@@ -567,12 +568,18 @@ int write_record(char* key, char* value) {
   void*     buffer;
   int       byte_count = 0;
   int       block_offset;
-   int64_t  byte_offset;
+  int64_t   byte_offset;
   int       index_result;
   int       hash_id = get_hash_val(HASH_BITS, key); 
+  int       find_result;
   
   // lock this part of the key-space to make the write atomic.
   hash_write_lock(hash_id);
+
+  if (find(key) > 0)  { // Bail if we've got a same-key collision.
+    hash_write_unlock(hash_id);
+    return -2;
+  }
 
   // Figure out how many blocks we need and then requisition
   // them from the block bitmap table.
@@ -591,7 +598,7 @@ int write_record(char* key, char* value) {
   // zero-padded on the end.
   if ((buffer = malloc(byte_count)) == NULL) {
     perror("malloc failed in write_record()");
-    // need to free blocks acquired
+    release_block_reservation(block_offset, blocks);
     hash_write_unlock(hash_id);
     return(-1);
   }
@@ -602,7 +609,7 @@ int write_record(char* key, char* value) {
   // write to the appropriate location in our file
   if ((pwrite(DB_FD, buffer, byte_count, byte_offset)) == -1) {
     perror("pwrite failed in write_record");
-    // need to free blocks acquired
+    release_block_reservation(block_offset, blocks);
     hash_write_unlock(hash_id);
     free(buffer);
     return(-1);
@@ -612,14 +619,9 @@ int write_record(char* key, char* value) {
   // Pass the key and the block offset to the index.
   index_result = write_index(key, block_offset, blocks);
   hash_write_unlock(hash_id);
-  if (index_result == -2) {
-    fprintf(stderr, "key already exists.\n");
-    // need to free blocks acquired.
-    return -2;
-  }
-  if (index_result == -1) {
-    fprintf(stderr, "write_index failed in write_record..\n");
-    // need to free blocks acquired. 
+  if (index_result < 0) {
+    fprintf(stderr, "write_index failed in write_record with %d.\n", index_result);
+    release_block_reservation(block_offset, blocks);
     return(-1);
   }
 
@@ -868,6 +870,7 @@ void delete_command(char msg[], char response[]) {
   char* part            = NULL;
   char key[KEY_LEN]     = "";
   int length            = 0;
+  int retval;
  
   if ((part = strtok(msg, "/")) == NULL) {
     sprintf(response, "Missing key.\n");
@@ -888,8 +891,12 @@ void delete_command(char msg[], char response[]) {
     return;
   }
 
-  if (delete_record(key) == 0) {
+  retval = delete_record(key);
+
+  if (retval == 0) {
     sprintf(response, "Delete OK.\n");
+  } else if (retval == -2) {
+    sprintf(response, "Not found.\n");
   } else {
     sprintf(response, "Delete failed.\n");
   } 

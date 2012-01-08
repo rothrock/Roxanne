@@ -28,6 +28,9 @@ Hash collisions are resolved by separate chaining onto linked lists at the
 end of the index file. The default location for the index file is in
 /var/roxanne/idx
 
+In addition to value lookups by key, the database provides a way to group
+keys in a hierarchical directory structure. See Composite Keys below
+
 The values for the given keys are stored in contiguous 4KB blocks in the 
 database file (/var/roxanne/db).  A file called block_bitmap tracks the 
 free/busy blocks in the db file. The dbr processes memory-map this file 
@@ -36,7 +39,28 @@ Blocks are only added to the db file as needed to accomodate new records.
 As typically built, the database can accomodate about a billion blocks.
 
 --------------
-Example
+Composite Keys
+--------------
+The database supports the notion of a composite key. That is, a key
+that is subdivided into a hierarchy that all keys participate in.
+
+To work with hierarchical keys, divide them with slashes '/'. The last
+element becomes the value. Like so:
+
+/a/b/c/my_value
+
+The key-space then becomes a kind of database on its own. A client
+can query the database for all the subkeys of a path. This gives clients
+building blocks for range queries and ordered (sorted) results.
+
+All lookups of values are still done via hashmap of the entire key. In 
+other words, values can only be fetched by providing the entire key. 
+This means that point-lookups of records will always be very fast.
+
+XXX The ability to read subkeys is still in development.
+
+--------------
+Usage Example
 --------------
 madison:Roxanne rothrock$ sudo dbr_ctl start
 Started listening.

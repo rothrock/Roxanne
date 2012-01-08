@@ -8,7 +8,7 @@ RUN_AS_USER='nobody'
 RUN_AS_GRP='nobody'
 DB_PATH='/var/roxanne'
 
-FILES="block_bitmap idx db"
+FILES="block_bitmap idx db keydb"
 
 function usage {
     echo "Usage: $0 {start|stop|kill|initdb [force]}"
@@ -62,6 +62,8 @@ case "$1" in
     sudo -u $RUN_AS_USER dd if=/dev/zero of=$DB_PATH/idx bs=1024 count=65536
     sudo -u $RUN_AS_USER cat /dev/null >$DB_PATH/db
     chown $RUN_AS_USER:$RUN_AS_GRP $DB_PATH/db
+    sudo -u $RUN_AS_USER cat /dev/null >$DB_PATH/keydb
+    chown $RUN_AS_USER:$RUN_AS_GRP $DB_PATH/keydb
   
     ;;
 

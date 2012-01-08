@@ -1,17 +1,21 @@
-
+CC := gcc
 OS := $(shell uname)
+CFLAGS := -Werror -g
+OBJ := roxanne_db.o tuple_bits.o hash_32.o
+DEPS := roxanne_db.h
 ifeq (${OS},Linux)
-	libs = -lrt -lm
+	LIBS := -lrt -lm
 endif
+
 default: dbr
 
-dbr: roxanne_db.c
-	gcc -Werror -g hash_32.c roxanne_db.c -o dbr $(libs)
+dbr: $(OBJ) $(DEPS)
+	gcc -o dbr $(OBJ) $(CFLAGS) $(LIBS)
 	chmod 755 dbr
 
 .PHONY: clean
 clean:
-	rm -rf dbr.dSYM dbr
+	rm -rf dbr.dSYM dbr *.o
 
 install:
 	install dbr /usr/local/bin

@@ -30,8 +30,11 @@ sem_t*          HASH_READ_LOCK;
 char            *SHM_BLOCK_BITMAP;
 char            *SHM_HASHBUCKET_BITMAP;
 int             BLOCK_BITMAP_FD;
+int             KEYDB_FD;
 int             DB_FD;
 int             IDX_FD;
+
+
 
 int main(int argc, char* argv[]) {
 
@@ -40,12 +43,11 @@ int main(int argc, char* argv[]) {
   int listen_fd, accept_fd;
   char* port = "4080";
   char* host = "::1";
+  char keydb_file[4096] = "/var/roxanne/keydb";
   char db_file[4096] = "/var/roxanne/db";
   char idx_file[4096] = "/var/roxanne/idx";
   char block_bitmap_file[4096] = "/var/roxanne/block_bitmap";
   int chld;
-  //int shm_block_offset_id;
-  //key_t shm_block_offset_key = 1;
   int i;
   int ch;
 
@@ -55,6 +57,7 @@ int main(int argc, char* argv[]) {
     switch (ch) {
 
       case 'd':
+        sprintf(keydb_file, "%s/keydb", optarg);
         sprintf(db_file, "%s/db", optarg);
         sprintf(idx_file, "%s/idx", optarg);
         sprintf(block_bitmap_file, "%s/block_bitmap", optarg);
@@ -137,6 +140,13 @@ int main(int argc, char* argv[]) {
   // Open our database file
   if ((DB_FD = open(db_file, O_RDWR | O_CREAT, 0666)) == -1) {
     fprintf(stderr, "Couldn't open database file named %s\n", db_file);
+    perror(NULL);
+    exit(-1);
+  }
+
+  // Open our keydb file
+  if ((KEYDB_FD = open(keydb_file, O_RDWR | O_CREAT, 0666)) == -1) {
+    fprintf(stderr, "Couldn't open key file named %s\n", keydb_file);
     perror(NULL);
     exit(-1);
   }
@@ -327,7 +337,7 @@ struct db_ptr find_db_ptr(char* key) {
   struct    idx index_rec = {};
   struct    db_ptr db_rec = {.block_offset = -1, .blocks = -1};
   int       result;
-   int64_t  pos  = hash_id * IDX_ENTRY_SIZE;
+  int64_t   pos  = hash_id * IDX_ENTRY_SIZE;
 
   while (1) {
 
@@ -638,15 +648,7 @@ int guts(int accept_fd, int listen_fd) {
   int msglen              = 0;    // length of the assembled message that we receive.
   int recvlen             = 0;    // how many bytes recv call returns.
   int responselen         = 0;   
-  //int length            = 0;
-  //char key[KEY_LEN];
-  //char* value;
-  //char* part;
-  //char* previous_part;
-  //char* cmd_offset;
-  //struct db_ptr db_rec;
   int retval;
-    
 
   // Re-register the sigterm handler to our cleanup function.
   signal(SIGTERM, sigterm_handler_child);
@@ -693,11 +695,6 @@ int guts(int accept_fd, int listen_fd) {
 
     } 
     
-    //length = 0;
-    //part = NULL;
-    //previous_part = NULL;    
-    //key[0] = '\0';
-
     switch (extract_command(msg, msglen))  {
 
       case 0: // create
@@ -793,19 +790,42 @@ void create_command(char msg[], char response[]) {
   char* previous_part   = NULL;
   int retval            = 0;
   char key[KEY_LEN]     = "";
+  struct keydb_column *tuple = NULL;
+  struct keydb_column *first = NULL;
+  struct keydb_column *tmp;
 
   if ((part = strtok(msg, "/")) == NULL) {
     sprintf(response, "Missing key.\n");
     return;
   }
+  
   for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
+
     if (previous_part != NULL) {
       length += strlen(previous_part);
       if (length > KEY_LEN - 1) {
         sprintf(response, "Key too large.\n");
         return;
       }
+
+      // Save away the list of key composites
+      if ((tmp = malloc(sizeof(struct keydb_column))) == NULL) {
+        sprintf(response, "Call to malloc() failed in create_command.\n");
+        perror("Call to malloc() failed in create_command for tuple->next.\n");
+        return;
+      }
+      strncpy(tmp->column, previous_part, KEY_LEN);
+      tmp->next = NULL;
+      if (tuple == NULL) {
+        tuple = tmp;
+        first = tmp;
+      } else {
+        tuple->next = tmp;
+        tuple = tuple->next;
+        tuple->next = NULL;
+      }
       strcat(key, previous_part);
+
     }
     previous_part = part;
   } 
@@ -817,12 +837,24 @@ void create_command(char msg[], char response[]) {
 
   retval = write_record(key, previous_part);
   if (retval == 0) {
-    sprintf(response, "Write OK.\n");
+    if (composite_insert(KEYDB_FD, first) == -1) {
+      delete_record(key); // undo what we did.
+      fprintf(stderr, "Composite key insertion failed.\n");
+      sprintf(response, "Write failed. Composite key insertion failed.\n");
+    } else {
+      sprintf(response, "Write OK.\n");
+    }
   } else if (retval == -2) { // key already exists.
     sprintf(response, "Write failed. Key exists in the index.\n");
   } else {
     sprintf(response, "write_record() failed. Don't know why.\n");
   }
+
+  while (first) { // free our list of key composites.
+    tmp = first->next;
+    free(first);
+    first = tmp;
+  };
 
 }
 
@@ -907,5 +939,6 @@ void usage(char *argv) {
   fprintf(stderr, "usage: %s [-h listen_addr] [-p listen_port] [-d /path/to/db/directory]\n", argv);
   exit(-1);
 }
+
 
 

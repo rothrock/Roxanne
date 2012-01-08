@@ -37,6 +37,7 @@ THE SOFTWARE.
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <semaphore.h>
 #include <signal.h>
 #include <math.h>
@@ -64,20 +65,35 @@ THE SOFTWARE.
 #define MSG_SIZE 65536
 #define HASH_BITS 16
 #define IDX_ENTRY_SIZE 1024
-#define KEY_LEN (IDX_ENTRY_SIZE - 3*(sizeof(int)))
+#define KEY_LEN (IDX_ENTRY_SIZE - 2*(sizeof(int)) - sizeof(int64_t))
 
 
 struct idx { // structure for an index record.
   char      key[KEY_LEN];
   int       block_offset; // starting block in the db file.
   int       length;       // db blocks consumed.
-  int       next;         // overflow ptr to next index_record on disk.
+  int64_t   next;         // overflow ptr to next index_record on disk.
 };
 
 
 struct  db_ptr { // a structure that points to a value in the db file.
-  int block_offset;
-  int blocks;
+  int64_t   block_offset;
+  int       blocks;
+};
+
+
+struct keydb_column {
+  char      column[KEY_LEN];
+  struct    keydb_column *next;
+};
+
+
+struct keydb_node {
+  char      column[KEY_LEN];
+  int       refcount;
+  int64_t   left;
+  int64_t   right;
+  int64_t   next;
 };
 
 
@@ -105,3 +121,9 @@ void      usage(char *argv);
 void      create_command(char msg[], char response[]);
 void      read_command(char msg[], char response[]);
 void      delete_command(char msg[], char response[]);
+int       keydb_insert(int fd, char column[], int64_t pos, bool go_next);
+int       keydb_lock(int64_t pos);
+int       keydb_unlock(int64_t pos);
+int       composite_insert(int KEYDB_FD, struct keydb_column *tuple);
+struct    keydb_node* keydb_find(int fd, char *key, int64_t pos);
+struct    keydb_column* keydb_tree(int fd, int64_t pos); 

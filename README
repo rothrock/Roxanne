@@ -113,9 +113,14 @@ zeta
 Protocol
 --------------
 
-Most commands are comprise of A keyword, a space, and a forward-slash.
+Data manipulation commands are comprised of:
 
-commands:
+   a keyword, 
+   a space, and 
+   a forward-slash.
+
+Data manipulation commands:
+
   create /key[/key].../value<newline>
 
   read /key[/key]...
@@ -124,6 +129,7 @@ commands:
 
   keys /[key][/key]....
 
+
+Other commands:
+
   quit
-
-

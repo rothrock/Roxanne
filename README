@@ -23,41 +23,52 @@ Look at the top of the dbr_ctl script for some initialization variables you
 Precis
 --------------
 Roxanne is a very simple database server that allows a client to store and 
-retrieve values by key.  Keys are stored in a hash map of 64K buckets. 
-Hash collisions are resolved by separate chaining onto linked lists at the 
-end of the index file. The default location for the index file is in
+retrieve values by key.  Keys are stored in a hash map of 64K buckets. Hash
+collisions are resolved by separate chaining onto linked lists at the end
+of the index file. The default location for the index file is in
 /var/roxanne/idx
 
 In addition to value lookups by key, the database provides a way to group
-keys in a hierarchical directory structure. See Composite Keys below
+keys in a hierarchical directory structure. See Composite Keys below.
 
 The values for the given keys are stored in contiguous 4KB blocks in the 
-database file (/var/roxanne/db).  A file called block_bitmap tracks the 
-free/busy blocks in the db file. The dbr processes memory-map this file 
-for very fast access. The db file starts out with zero blocks. 
-Blocks are only added to the db file as needed to accomodate new records. 
-As typically built, the database can accomodate about a billion blocks.
+database file (/var/roxanne/db). A file called block_bitmap tracks the 
+free/busy blocks in the db file. The dbr processes memory-map this file for
+very fast access. The db file starts out with zero blocks.  Blocks are only 
+added to the db file as needed to accomodate new records. As typically
+built, the database can accomodate about a billion blocks.
 
 --------------
 Composite Keys
 --------------
 The database supports the notion of a composite key. That is, a key
-that is subdivided into a hierarchy that all keys participate in.
+that is subdivided into a hierarchy that all keys participate in. The key-
+space is similar to a typical Unix filesystem organized into directories.
 
 To work with hierarchical keys, divide them with slashes '/'. The last
 element becomes the value. Like so:
 
 /a/b/c/my_value
 
+The keys are grouped into a tree of subdirectories:
+    /
+     a/
+       b/
+         c/
+
 The key-space then becomes a kind of database on its own. A client
 can query the database for all the subkeys of a path. This gives clients
 building blocks for range queries and ordered (sorted) results.
 
 All lookups of values are still done via hashmap of the entire key. In 
-other words, values can only be fetched by providing the entire key. 
-This means that point-lookups of records will always be very fast.
+other words, values can only be fetched by providing the entire key.
+In this case, the hash-lookup key is '/a/b/c' which points to a starting
+block in the db that contains 'my_value'.
+ 
+This means that point-lookups of records will always be very fast, but that
+the operator can use the key-space to organize and sort results.
 
-XXX The ability to read subkeys is still in development.
+Results from the keys command return in ascending sort order (strcmp).
 
 --------------
 Usage Example
@@ -83,14 +94,36 @@ Not found.
 read /alpha/beta
 record
 
+...Now a demonstration of the 'keys' command:
+
+create /alpha/phi/record
+Write OK.
+create /alpha/1/record 
+Write OK.
+create /alpha/zeta/record
+Write OK.
+keys /alpha
+1
+beta
+phi
+zeta
+
+
 --------------
 Protocol
 --------------
+
+Most commands are comprise of A keyword, a space, and a forward-slash.
+
 commands:
-  create /key[/key/key/key...]/value<newline>
+  create /key[/key].../value<newline>
 
-  read  /key[/key/key/key...]
+  read /key[/key]...
 
-  delete  /key[/key/key/key...]
+  delete /key[/key]...
+
+  keys /[key][/key]....
+
+  quit
 
 

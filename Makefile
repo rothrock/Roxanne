@@ -1,6 +1,7 @@
 CC := gcc
 OS := $(shell uname)
 CFLAGS := -Werror -g
+OBJDIR := obj
 OBJ := roxanne_db.o tuple_bits.o hash_32.o
 DEPS := roxanne_db.h
 ifeq (${OS},Linux)
@@ -15,7 +16,7 @@ dbr: $(OBJ) $(DEPS)
 
 .PHONY: clean
 clean:
-	rm -rf dbr.dSYM dbr *.o
+	rm -rf dbr.dSYM dbr *.o 
 
 install:
 	install dbr /usr/local/bin

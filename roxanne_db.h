@@ -66,6 +66,7 @@ THE SOFTWARE.
 #define HASH_BITS 16
 #define IDX_ENTRY_SIZE 1024
 #define KEY_LEN (IDX_ENTRY_SIZE - 2*(sizeof(int)) - sizeof(int64_t))
+#define KEYDB_BUCKETS 1024
 
 
 struct idx { // structure for an index record.
@@ -94,7 +95,25 @@ struct keydb_node {
   int64_t   left;
   int64_t   right;
   int64_t   next;
+  int64_t   pos; // file position of this record.
 };
+
+
+// Globals
+sem_t*          DB_WRITE_LOCK;
+sem_t*          KEYDB_WRITE_LOCK;
+sem_t*          IDX_WRITE_LOCK;
+sem_t*          HASH_WRITE_LOCK;
+sem_t*          HASH_READ_LOCK;
+char            *SHM_BLOCK_BITMAP;
+char            *SHM_HASHBUCKET_BITMAP;
+char            *SHM_KEYDB_BITMAP;
+int             BLOCK_BITMAP_FD;
+int             KEYDB_FD;
+int             DB_FD;
+int             IDX_FD;
+
+
 
 
 // Function signatures
@@ -121,9 +140,10 @@ void      usage(char *argv);
 void      create_command(char msg[], char response[]);
 void      read_command(char msg[], char response[]);
 void      delete_command(char msg[], char response[]);
+void      keys_command(char msg[], char response[]);
 int       keydb_insert(int fd, char column[], int64_t pos, bool go_next);
-int       keydb_lock(int64_t pos);
-int       keydb_unlock(int64_t pos);
+void      keydb_lock(int64_t pos);
+void      keydb_unlock(int64_t pos);
 int       composite_insert(int KEYDB_FD, struct keydb_column *tuple);
 struct    keydb_node* keydb_find(int fd, char *key, int64_t pos);
-struct    keydb_column* keydb_tree(int fd, int64_t pos); 
+void*     keydb_tree(int fd, int64_t pos, struct keydb_column **list); 

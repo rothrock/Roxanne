@@ -22,19 +22,6 @@ THE SOFTWARE.
 
 #include "roxanne_db.h"
 
-// Globals
-sem_t*          DB_WRITE_LOCK;
-sem_t*          IDX_WRITE_LOCK;
-sem_t*          HASH_WRITE_LOCK;
-sem_t*          HASH_READ_LOCK;
-char            *SHM_BLOCK_BITMAP;
-char            *SHM_HASHBUCKET_BITMAP;
-int             BLOCK_BITMAP_FD;
-int             KEYDB_FD;
-int             DB_FD;
-int             IDX_FD;
-
-
 
 int main(int argc, char* argv[]) {
 
@@ -91,6 +78,12 @@ int main(int argc, char* argv[]) {
   }
   sem_post(DB_WRITE_LOCK);
 
+  if ((KEYDB_WRITE_LOCK = sem_open("keydb_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
+    perror("semaphore init failed");
+    exit(-1);
+  }
+  sem_post(KEYDB_WRITE_LOCK);
+
   // Create our global write lock for the index file.
   // This is used to safely append to the end of the file.
   if ((IDX_WRITE_LOCK = sem_open("idx_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
@@ -125,8 +118,16 @@ int main(int argc, char* argv[]) {
     exit(-1);
   }
   
+  // A mem-mapped block of anonymous memory used to lock parts of the hash key space. 
+  // See hash_write_lock() and hash_write_unlock()
   if ((SHM_HASHBUCKET_BITMAP = mmap((caddr_t)0, ((1<<HASH_BITS)/8), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0)) == MAP_FAILED) {
     perror("Problem mmapping the hash bitmap");
+    exit(-1);
+  }
+  
+  // A mem-mapped block of anonymous memory used to lock parts of the keydb space.
+  if ((SHM_KEYDB_BITMAP = mmap((caddr_t)0, ((KEYDB_BUCKETS)/8), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0)) == MAP_FAILED) {
+    perror("Problem mmapping the keydb bitmap");
     exit(-1);
   }
   
@@ -268,13 +269,15 @@ int start_listening(char* host, char* port, int backlog) {
 
 int extract_command(char* msg, int msglen) {
 
-  char* commands[3] = { "create ",           // 0
-                        "read ",             // 1
-                        "delete "};          // 2
+  char* commands[5] = { "create /",      // 0
+                        "read /",        // 1
+                        "delete /",      // 2
+                        "keys /",        // 3
+                        "quit"};         // 4
   int i = 0;
   int cmdlen;
   int max_chars = 0;
-  for (; i < 3; i++) {
+  for (; i < 5; i++) {
     cmdlen = strlen(commands[i]);
     max_chars = msglen < cmdlen ? msglen : cmdlen;
     if (memcmp(commands[i], msg, max_chars) == 0) return(i);
@@ -401,7 +404,7 @@ int write_index(char* key, int block_offset, int length) {
   struct      idx index_rec = {};
   struct      idx* index_rec_ptr;
   int         result;
-   int64_t    pos  = hash_id * IDX_ENTRY_SIZE;
+  int64_t     pos  = hash_id * IDX_ENTRY_SIZE;
   int         find_results = find(key);
 
   index_rec_ptr = &index_rec;
@@ -504,8 +507,8 @@ int delete_record(char* key) {
   void*       buffer;
   int         byte_count = 0;
   int         block_offset;
-   int64_t    byte_offset;
-   int64_t    pos = 0;
+  int64_t     byte_offset;
+  int64_t     pos = 0;
   int         result;
   struct idx  index_rec;
   int         hash_id = get_hash_val(HASH_BITS, key);
@@ -658,6 +661,7 @@ int guts(int accept_fd, int listen_fd) {
 
     msglen = 0;
     bzero(msg, MSG_SIZE);
+    bzero(response, MSG_SIZE);
     msg_cursor = (void*)msg;
 
     // Wait for some data
@@ -708,6 +712,13 @@ int guts(int accept_fd, int listen_fd) {
       case 2: // delete
         delete_command(msg, response);
         break;
+
+      case 3: // subkeys
+        keys_command(msg, response);
+        break;
+
+      case 4: // quit
+        cleanup_and_exit();
 
       default:
         sprintf(response, "Unknown command.\n");
@@ -791,14 +802,12 @@ void create_command(char msg[], char response[]) {
   int retval            = 0;
   char key[KEY_LEN]     = "";
   struct keydb_column *tuple = NULL;
-  struct keydb_column *first = NULL;
+  struct keydb_column *head = NULL;
   struct keydb_column *tmp;
 
-  if ((part = strtok(msg, "/")) == NULL) {
-    sprintf(response, "Missing key.\n");
-    return;
-  }
   
+  part = strtok(msg, "/");
+
   for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
 
     if (previous_part != NULL) {
@@ -818,12 +827,13 @@ void create_command(char msg[], char response[]) {
       tmp->next = NULL;
       if (tuple == NULL) {
         tuple = tmp;
-        first = tmp;
+        head = tmp;
       } else {
         tuple->next = tmp;
         tuple = tuple->next;
         tuple->next = NULL;
       }
+      strcat(key, "/");
       strcat(key, previous_part);
 
     }
@@ -837,7 +847,7 @@ void create_command(char msg[], char response[]) {
 
   retval = write_record(key, previous_part);
   if (retval == 0) {
-    if (composite_insert(KEYDB_FD, first) == -1) {
+    if (composite_insert(KEYDB_FD, head) == -1) {
       delete_record(key); // undo what we did.
       fprintf(stderr, "Composite key insertion failed.\n");
       sprintf(response, "Write failed. Composite key insertion failed.\n");
@@ -850,10 +860,10 @@ void create_command(char msg[], char response[]) {
     sprintf(response, "write_record() failed. Don't know why.\n");
   }
 
-  while (first) { // free our list of key composites.
-    tmp = first->next;
-    free(first);
-    first = tmp;
+  while (head) { // free our list of key composites.
+    tmp = head->next;
+    free(head);
+    head = tmp;
   };
 
 }
@@ -867,10 +877,8 @@ void read_command(char msg[], char response[]) {
   int length            = 0;
   struct  db_ptr db_rec;
 
-  if ((part = strtok(msg, "/")) == NULL) {
-    sprintf(response, "Missing key.\n");
-    return;
-  }
+  part = strtok(msg, "/");
+
   for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
     length += strlen(part);
     if (length > KEY_LEN - 1) {
@@ -878,6 +886,7 @@ void read_command(char msg[], char response[]) {
       part = NULL;
       break;
     }
+    strcat(key, "/");
     strcat(key, part);
   } 
 
@@ -903,11 +912,12 @@ void delete_command(char msg[], char response[]) {
   char key[KEY_LEN]     = "";
   int length            = 0;
   int retval;
+  struct keydb_column *tuple = NULL;
+  struct keydb_column *head = NULL;
+  struct keydb_column *tmp;
  
-  if ((part = strtok(msg, "/")) == NULL) {
-    sprintf(response, "Missing key.\n");
-    return;
-  }
+  part = strtok(msg, "/");
+
   for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
     length += strlen(part);
     if (length > KEY_LEN - 1) {
@@ -915,6 +925,23 @@ void delete_command(char msg[], char response[]) {
       part = NULL;
       break;
     }
+    // Save away the list of key composites
+    if ((tmp = malloc(sizeof(struct keydb_column))) == NULL) {
+      sprintf(response, "Delete failed.\n");
+      perror("Call to malloc() failed in delete_command.\n");
+      return;
+    }
+    strncpy(tmp->column, part, KEY_LEN);
+    tmp->next = NULL;
+    if (tuple == NULL) {
+      tuple = tmp;
+      head = tmp;
+    } else {
+      tuple->next = tmp;
+      tuple = tuple->next;
+      tuple->next = NULL;
+    }
+    strcat(key, "/");
     strcat(key, part);
   } 
 
@@ -926,13 +953,76 @@ void delete_command(char msg[], char response[]) {
   retval = delete_record(key);
 
   if (retval == 0) {
-    sprintf(response, "Delete OK.\n");
+    if (composite_delete(KEYDB_FD, head) == -1) {
+      fprintf(stderr, "Composite key delete failed.\n");
+      sprintf(response, "Delete failed. Composite key delete failed.\n");
+    } else {
+      sprintf(response, "Delete OK.\n");
+    }
   } else if (retval == -2) {
     sprintf(response, "Not found.\n");
   } else {
-    sprintf(response, "Delete failed.\n");
+    sprintf(response, "Delete failed. Could not delete record.\n");
   } 
 
+  while (head) { // free our list of key composites.
+    tmp = head->next;
+    free(head);
+    head = tmp;
+  };
+
+}
+
+void keys_command(char msg[], char response[]) {
+
+  char* part = NULL;
+  char key[KEY_LEN] = "";
+  int length = 0;
+  int retval;
+  int64_t pos = 0;
+  struct keydb_node *node;
+  struct keydb_column *list, *tmp, *cursor;
+  bool some_content = false; // Does our key list have any keys in it?
+  list = NULL; 
+  part = strtok(msg, "/");
+  
+  for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
+    length += strlen(part);
+    if (length > KEY_LEN - 1) {
+      sprintf(response, "Key too long.\n");
+      part = NULL;
+      return;
+    }
+
+    if ((node = keydb_find(KEYDB_FD, part, pos))) {
+      pos = node->next;
+      free(node);
+      if (pos == 0) { // There is no next subtree.
+        sprintf(response, "No subkeys.\n");
+        return;
+      }
+    } else {
+      sprintf(response, "Not found.\n");
+      return;
+    } 
+
+  }
+
+  keydb_tree(KEYDB_FD, pos, &list);
+  while (list) {
+    if (list->column[0] != '\0') {
+      strcat(response, list->column);
+      strcat(response, "\n");
+      some_content = true;
+    }
+    tmp = list->next;
+    free(list);
+    list = tmp;
+  }
+  
+  if (!some_content) sprintf(response, "No subkeys.\n");
+
+  return;
 }
 
 void usage(char *argv) {

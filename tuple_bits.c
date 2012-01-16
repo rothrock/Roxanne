@@ -1,22 +1,51 @@
 #include "roxanne_db.h"
 
-int keydb_lock(int64_t pos) {
+void keydb_lock(int64_t pos) {
 
-  return 0;
+  char key[1024] = "";
+  int hash_number;
+
+  sprintf(key, "%llu", pos); // turn pos into a string.
+  hash_number = get_hash_val(10, key); // 2^10 = 1024. See SHM_KEYDB_BITMAP.
+
+  while (1) {
+    sem_wait(KEYDB_WRITE_LOCK);
+    if ((bit_array_test(SHM_KEYDB_BITMAP, hash_number)) == 0) {
+      bit_array_set(SHM_KEYDB_BITMAP, hash_number);
+      sem_post(KEYDB_WRITE_LOCK);
+      break;
+    }
+    sem_post(HASH_WRITE_LOCK);
+  }
+
 }
 
-int keydb_unlock(int64_t pos) {
+void keydb_unlock(int64_t pos) {
 
-  return 0;
+  char key[1024] = "";
+  int hash_number;
+
+  sprintf(key, "%llu", pos); // turn pos into a string.
+  hash_number = get_hash_val(10, key); // 2^10 = 1024. See SHM_KEYDB_BITMAP.
+
+  sem_wait(KEYDB_WRITE_LOCK); 
+  bit_array_clear(SHM_KEYDB_BITMAP, hash_number);
+  sem_post(KEYDB_WRITE_LOCK);
+
 }
 
 struct keydb_node* key_buf_read(int fd, int64_t pos) {
+  // Fetches the keydb record from disk located at position 'pos'.
+  // Returns a pointer to a keydb_node that must be freed
+  // by the caller if the pointer is not NULL.
+  //
+  // Returns NULL on failure to read.
 
-  int64_t n;
+  int n;
   struct keydb_node *buffer;
 
   if ((buffer = malloc(sizeof(struct keydb_node))) == NULL) {
-    perror("Call to malloc() failed in keydb_find.\n");
+    perror("Call to malloc() failed in key_buf_read.\n");
     return NULL;
   }
   bzero(buffer, sizeof(struct keydb_node));
@@ -24,7 +53,7 @@ struct keydb_node* key_buf_read(int fd, int64_t pos) {
   n = pread(fd, buffer, sizeof(struct keydb_node), pos);
 
   if (n == -1) {
-    perror("pread() failed in keydb_find.\n");
+    perror("pread() failed in key_buf_read.\n");
     free(buffer);
     return NULL;
   }
@@ -34,43 +63,50 @@ struct keydb_node* key_buf_read(int fd, int64_t pos) {
     return(NULL);
   }
 
-  if (buffer->refcount == 0) { // This record is tombstoned.
-    free(buffer);
-    return(NULL);
-  }
 
   return buffer;
 }
 
   
-struct keydb_column* keydb_tree(int fd, int64_t pos) {
+void* keydb_tree(int fd, int64_t pos, struct keydb_column **list) {
   // Return a linked list of keys (stored as struct keydb_column)
   // found in the tree pointed at by pos. The caller must free the list.
   
   struct keydb_node* parent;
   struct keydb_node* buffer;
-  struct keydb_column *left, *mid, *right;
+  struct keydb_column *mid = NULL;
   int64_t next_pos;
   int64_t n;
 
   buffer = key_buf_read(fd, pos);
 
-  if (buffer == NULL)  return(NULL);
+  if (buffer == NULL) return NULL;
 
-  // OK, there may really be something here.
   if ((mid = malloc(sizeof(struct keydb_column))) == NULL) {
     perror("Call to malloc() failed in keydb_tree.\n");
     return NULL;
   }
-  memcpy(mid, buffer->column, KEY_LEN);
-  left = keydb_tree(fd, buffer->left);
-  right = keydb_tree(fd, buffer->right);
+  mid->next = NULL;
 
-  mid->next = right;
-  left->next = mid;
+  if (buffer->refcount <= 0) { //this record is tombstoned.
+    mid->column[0] = '\0'; // Put a terminator at the start of the string.
+  } else {
+    memcpy(mid->column, buffer->column, KEY_LEN); // otherwise load it up.
+  }
+
+  // Right
+  if (buffer->right != 0) keydb_tree(fd, buffer->right, list);
+
+  // Middle
+  mid->next = *list;
+  *list = mid; 
+
+  // Left
+  if (buffer->left  != 0) keydb_tree(fd, buffer->left, list);
+
   free(buffer);
-  return left;
 
+  return NULL;
 }
 
 
@@ -89,6 +125,7 @@ struct keydb_node* keydb_find(int fd, char *key, int64_t pos) {
   cmp = strncmp(buffer->column, key, KEY_LEN);
 
   if (cmp == 0) {
+    if (pos != buffer->pos) fprintf(stderr, "positions don't match.\n");
     return(buffer);
   } else if (cmp < 0) { // Go right
     pos = buffer->right;
@@ -100,22 +137,66 @@ struct keydb_node* keydb_find(int fd, char *key, int64_t pos) {
     if (pos != 0) return(keydb_find(fd, key, pos));
   }
      
+  return NULL;
 }  
+
+int composite_delete(int fd, struct keydb_column *tuple) {
+  // Reduces the refcounts of the given list of key components into the keydb.
+
+  int64_t pos = 0;
+  struct keydb_node *node;
+
+  sem_wait(KEYDB_WRITE_LOCK);
+  while (tuple) {
+    node = keydb_find(fd, tuple->column, pos);
+    if (node == NULL) {
+      sem_post(KEYDB_WRITE_LOCK);
+      return -1;
+    }
+    if (node->refcount == 0) { // nothing here. We can't lower refcount below zero.
+      free(node);
+      return(-1);
+      sem_post(KEYDB_WRITE_LOCK);
+    }
+    pos = node->pos;
+    node->refcount--;
+    if ((pwrite(fd, node, sizeof(struct keydb_node), pos)) == -1) {
+      fprintf(stderr, "Problem writing node at %llu in composite_delete().\n", pos);
+    };
+    pos = node->next;  
+    tuple = tuple->next;
+    free(node);
+
+  }
+
+  sem_post(KEYDB_WRITE_LOCK);
+  return 0;
+}    
 
 
 int composite_insert(int fd, struct keydb_column *tuple) {
-  int pos = 0;
+  // Inserts the given list of key components into the keydb.
 
+  int64_t pos = 0;
+
+  sem_wait(KEYDB_WRITE_LOCK);
   pos = keydb_insert(fd, tuple->column, pos, false);
-  if (pos == -1) return -1;
+  if (pos == -1) {
+    sem_post(KEYDB_WRITE_LOCK);
+    return -1;
+  }
   tuple = tuple->next;  
 
   while (tuple) {
     pos = keydb_insert(fd, tuple->column, pos, true);
-    if (pos == -1) return -1;
+    if (pos == -1){
+      sem_post(KEYDB_WRITE_LOCK);
+      return -1;
+    }
     tuple = tuple->next;
   };
 
+  sem_post(KEYDB_WRITE_LOCK);
   return 0;
 }    
 
@@ -133,10 +214,8 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
   struct keydb_node *buffer;
   struct stat stat_info;
 
-  keydb_lock(pos);
   if ((buffer = malloc(sizeof(struct keydb_node))) == NULL) {
     perror("Call to malloc() failed in keydb_insert.\n");
-    keydb_unlock(pos);
     return -1;
   }
 
@@ -145,7 +224,6 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
   n = pread(fd, buffer, sizeof(struct keydb_node), pos);
   if (n == -1) {
     perror("pread() failed in keydb_insert.\n");
-    keydb_unlock(pos);
     free(buffer);
     return -1;
   }
@@ -153,7 +231,6 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
 
   if (go_next) {
     if (n == 0) { // We can't go 'next' on a zero-length file.
-      keydb_unlock(pos);
       fprintf(stderr, "pos is at EOF but we need to read a real record.\n");
       free(buffer);
       return -1;
@@ -161,26 +238,23 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
     if (buffer->next == 0) { // create our node and return it's position.
       if ((next_pos = lseek(fd, 0, SEEK_END)) == -1) {
         perror("lseek failed in keydb_insert\n");
-        keydb_unlock(pos);
         free(buffer);
         return -1;
       }
 
-      keydb_lock(next_pos);
       buffer->next = next_pos;
       pwrite(fd, buffer, sizeof(struct keydb_node), pos);
       bzero(buffer, sizeof(struct keydb_node));
       strcpy(buffer->column, column);
       buffer->refcount = 1;
+      buffer->pos = next_pos;
       pwrite(fd, buffer, sizeof(struct keydb_node), next_pos);
-      keydb_unlock(next_pos);
       free(buffer);
       return next_pos;
 
     } else { // insert our node in the tree that next points to.
       next_pos = buffer->next;
       free(buffer);
-      keydb_unlock(pos);
       return(keydb_insert(fd, column, next_pos, false));
     }
   }
@@ -191,8 +265,8 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
     
     memcpy(buffer->column, column, KEY_LEN);
     buffer->refcount = 1;
+    buffer->pos = pos;
     pwrite(fd, buffer, sizeof(struct keydb_node), pos);
-    keydb_unlock(pos);
     free(buffer);
     return pos;
   }
@@ -204,7 +278,6 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
   if (comparison > 0) { // node on disk is bigger, we need to go left.
 
     if (buffer->left != 0) { // go try to insert on the left node.
-      keydb_unlock(pos);
       pos = buffer->left;
       free(buffer);
       return keydb_insert(fd, column, pos, false);
@@ -212,18 +285,16 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
     } else { // There is no left node. Make one.
       if ((next_pos = lseek(fd, 0, SEEK_END)) == -1) {
         perror("lseek failed in keydb_insert\n");
-        keydb_unlock(pos);
         free(buffer);
         return -1;
       }
-      keydb_lock(next_pos);
       buffer->left = next_pos;
       pwrite(fd, buffer, sizeof(struct keydb_node), pos);
       bzero(buffer, sizeof(struct keydb_node));
-      strcpy(buffer->column, column);
+      memcpy(buffer->column, column, KEY_LEN);
       buffer->refcount = 1;
+      buffer->pos = next_pos;
       pwrite(fd, buffer, sizeof(struct keydb_node), next_pos);
-      keydb_unlock(next_pos);
       free(buffer);
       return next_pos;
       }
@@ -231,26 +302,23 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
   } else if (comparison < 0) { // node on disk is smaller, we need to go right.
 
     if (buffer->right != 0) { // go try to insert on the right node.
-      keydb_unlock(pos);
       pos = buffer->right;
       free(buffer);
       return keydb_insert(fd, column, pos, false);
 
-    } else { // There is no left node. Make one.
+    } else { // There is no right node. Make one.
       if ((next_pos = lseek(fd, 0, SEEK_END)) == -1) {
         perror("lseek failed in keydb_insert\n");
-        keydb_unlock(pos);
         free(buffer);
         return -1;
       }
-      keydb_lock(next_pos);
       buffer->right = next_pos;
       pwrite(fd, buffer, sizeof(struct keydb_node), pos);
       bzero(buffer, sizeof(struct keydb_node));
-      strcpy(buffer->column, column);
+      memcpy(buffer->column, column, KEY_LEN);
       buffer->refcount = 1;
+      buffer->pos = next_pos;
       pwrite(fd, buffer, sizeof(struct keydb_node), next_pos);
-      keydb_unlock(next_pos);
       free(buffer);
       return next_pos;
       }
@@ -259,7 +327,6 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
 
     buffer->refcount++;
     pwrite(fd, buffer, sizeof(struct keydb_node), pos);
-    keydb_unlock(pos);
     free(buffer);
     return pos;
   

@@ -58,6 +58,8 @@ THE SOFTWARE.
 // Stuff for .h
 
 // Constants -n- Macros
+#define LEFT 0
+#define RIGHT 1
 #define BACKLOG 25
 #define BLOCK_SIZE 4096
 #define MAX_BLOCKS 1073741824
@@ -108,8 +110,10 @@ sem_t*          HASH_READ_LOCK;
 char            *SHM_BLOCK_BITMAP;
 char            *SHM_HASHBUCKET_BITMAP;
 char            *SHM_KEYDB_BITMAP;
+char            THE_CAVE[4096] = "/var/roxanne";
 int             BLOCK_BITMAP_FD;
 int             KEYDB_FD;
+int             KEYDB_FREELIST_FD;
 int             DB_FD;
 int             IDX_FD;
 
@@ -147,3 +151,5 @@ void      keydb_unlock(int64_t pos);
 int       composite_insert(int KEYDB_FD, struct keydb_column *tuple);
 struct    keydb_node* keydb_find(int fd, char *key, int64_t pos);
 void*     keydb_tree(int fd, int64_t pos, struct keydb_column **list); 
+int       find_free_key_node(int keydb_fd);
+int       connect_and_add_node(int direction, struct keydb_node* buffer, char column[], int pos, int fd);

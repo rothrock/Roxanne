@@ -230,14 +230,14 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
 
 
   if (go_next) {
-    if (n == 0) { // We can't go 'next' on a zero-length file.
+    if (n == 0) { // We can't go 'next' off a record that doesn't exist.
       fprintf(stderr, "pos is at EOF but we need to read a real record.\n");
       free(buffer);
       return -1;
     }
-    if (buffer->next == 0) { // create our node and return it's position.
-      if ((next_pos = lseek(fd, 0, SEEK_END)) == -1) {
-        perror("lseek failed in keydb_insert\n");
+    if (buffer->next == 0) { // We're making a new subkey tree.
+      if ((next_pos = find_free_key_node(fd)) == -1) {
+        fprintf(stderr, "find_free_key_node_failed.\n");
         free(buffer);
         return -1;
       }
@@ -252,7 +252,9 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
       free(buffer);
       return next_pos;
 
-    } else { // insert our node in the tree that next points to.
+    } else { // insert our node in the tree that next points to. We're
+             // adding a subkey to an existing tree. Calling ourself with
+             // go_next set to false moves us to the logic below.
       next_pos = buffer->next;
       free(buffer);
       return(keydb_insert(fd, column, next_pos, false));
@@ -277,51 +279,30 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
   
   if (comparison > 0) { // node on disk is bigger, we need to go left.
 
-    if (buffer->left != 0) { // go try to insert on the left node.
+    if (buffer->left != 0) { // need to keep going left.
+
       pos = buffer->left;
       free(buffer);
       return keydb_insert(fd, column, pos, false);
 
     } else { // There is no left node. Make one.
-      if ((next_pos = lseek(fd, 0, SEEK_END)) == -1) {
-        perror("lseek failed in keydb_insert\n");
-        free(buffer);
-        return -1;
-      }
-      buffer->left = next_pos;
-      pwrite(fd, buffer, sizeof(struct keydb_node), pos);
-      bzero(buffer, sizeof(struct keydb_node));
-      memcpy(buffer->column, column, KEY_LEN);
-      buffer->refcount = 1;
-      buffer->pos = next_pos;
-      pwrite(fd, buffer, sizeof(struct keydb_node), next_pos);
-      free(buffer);
-      return next_pos;
-      }
+
+      return connect_and_add_node(LEFT, buffer, column, pos, fd);
+
+    }
 
   } else if (comparison < 0) { // node on disk is smaller, we need to go right.
 
-    if (buffer->right != 0) { // go try to insert on the right node.
+    if (buffer->right != 0) { // need to keep going right
+
       pos = buffer->right;
       free(buffer);
       return keydb_insert(fd, column, pos, false);
 
     } else { // There is no right node. Make one.
-      if ((next_pos = lseek(fd, 0, SEEK_END)) == -1) {
-        perror("lseek failed in keydb_insert\n");
-        free(buffer);
-        return -1;
-      }
-      buffer->right = next_pos;
-      pwrite(fd, buffer, sizeof(struct keydb_node), pos);
-      bzero(buffer, sizeof(struct keydb_node));
-      memcpy(buffer->column, column, KEY_LEN);
-      buffer->refcount = 1;
-      buffer->pos = next_pos;
-      pwrite(fd, buffer, sizeof(struct keydb_node), next_pos);
-      free(buffer);
-      return next_pos;
-      }
+
+      return connect_and_add_node(RIGHT, buffer, column,  pos, fd);
+    }
 
   } else { // we match the node here. Simply up the refcount.
 
@@ -333,5 +314,64 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
   }
   
   return 0;
+}
+
+
+int find_free_key_node(int keydb_fd) {
+  // The hope is that one day there will be a freelist of returned keydb
+  // blocks that we re-use. For now, this is a placeholder.
+
+  uint64_t pos = 0;
+
+  if (pos == 0) { // Nothing on the freelist. Add at the end of the keydb file.
+    if ((pos = lseek(keydb_fd, 0, SEEK_END)) == -1) {
+      perror("lseek failed in find_free_key_node\n");
+      return -1;
+    } else {
+      return pos;
+    }
+  }
+
+};
+
+int keydb_txlog_append(int64_t pos) {
+  
+  return 0;
+}
+
+
+int connect_and_add_node(int direction, struct keydb_node* buffer, char column[], int pos, int fd) {
+  // update the current node with a link to the new
+  // child node that we will also create.
+
+  int next_pos;
+
+  if ((next_pos = find_free_key_node(fd)) == -1) {
+    fprintf(stderr, "find_free_key_node_failed.\n");
+    free(buffer);
+    return -1;
+  }
+
+  if (direction == LEFT) {
+    buffer->left = next_pos;
+  }  else {
+    buffer->right = next_pos;
+  }
+
+  buffer->left = next_pos;
+  if ((pwrite(fd, buffer, sizeof(struct keydb_node), pos)) == -1) { // point current node to new child.
+    perror("Call to pwrite failed in connect_and_add_node.\n");
+    return -1;
+  }
+  bzero(buffer, sizeof(struct keydb_node));
+  memcpy(buffer->column, column, KEY_LEN);
+  buffer->refcount = 1;
+  buffer->pos = next_pos;
+  if ((pwrite(fd, buffer, sizeof(struct keydb_node), next_pos)) == -1) { // create the new child.
+    perror("Call to pwrite failed in connect_and_add_node.\n");
+    return -1;
+  }
+  free(buffer);
+  return next_pos;
 }
 

@@ -30,10 +30,11 @@ int main(int argc, char* argv[]) {
   int listen_fd, accept_fd;
   char* port = "4080";
   char* host = "::1";
-  char keydb_file[4096] = "/var/roxanne/keydb";
-  char db_file[4096] = "/var/roxanne/db";
-  char idx_file[4096] = "/var/roxanne/idx";
-  char block_bitmap_file[4096] = "/var/roxanne/block_bitmap";
+  char keydb_file[4096];
+  char keydb_freelist[4096];
+  char db_file[4096];
+  char idx_file[4096];
+  char block_bitmap_file[4096];
   int chld;
   int i;
   int ch;
@@ -44,10 +45,7 @@ int main(int argc, char* argv[]) {
     switch (ch) {
 
       case 'd':
-        sprintf(keydb_file, "%s/keydb", optarg);
-        sprintf(db_file, "%s/db", optarg);
-        sprintf(idx_file, "%s/idx", optarg);
-        sprintf(block_bitmap_file, "%s/block_bitmap", optarg);
+        sprintf(THE_CAVE, "%s", optarg);
         break;
 
       case 'h':
@@ -67,6 +65,11 @@ int main(int argc, char* argv[]) {
   argc -= optind;
   argv += optind;
 
+  sprintf(keydb_file, "%s/keydb", THE_CAVE);
+  sprintf(keydb_freelist, "%s/keydb_freelist", THE_CAVE);
+  sprintf(db_file, "%s/db", THE_CAVE);
+  sprintf(idx_file, "%s/idx", THE_CAVE);
+  sprintf(block_bitmap_file, "%s/block_bitmap", THE_CAVE);
   
 
   // Create our global write lock for the db and the block bitmap.
@@ -148,6 +151,13 @@ int main(int argc, char* argv[]) {
   // Open our keydb file
   if ((KEYDB_FD = open(keydb_file, O_RDWR | O_CREAT, 0666)) == -1) {
     fprintf(stderr, "Couldn't open key file named %s\n", keydb_file);
+    perror(NULL);
+    exit(-1);
+  }
+
+  // Open our keydb freelist
+  if ((KEYDB_FREELIST_FD = open(keydb_freelist, O_RDWR | O_CREAT, 0666)) == -1) {
+    fprintf(stderr, "Couldn't open key file named %s\n", keydb_freelist);
     perror(NULL);
     exit(-1);
   }
@@ -1032,3 +1042,21 @@ void usage(char *argv) {
 
 
 
+int keydb_txlog_reset() {
+  // Creates a transaction log file if one doesn't exist.
+  // Otherwise it truncates the transaction log file.
+
+  int retval;
+  int pid = getpid();
+  char log_file[4096];
+
+  snprintf(log_file, (4096 - sizeof(int)), "%s/%d.txlog", THE_CAVE, pid);
+  
+ if ((retval = open(log_file, O_TRUNC | O_APPEND | O_CREAT, 0666)) == -1) {
+      fprintf(stderr, "Couldn't open tx_log %s\n", log_file);
+      perror(NULL);
+      return -1;
+  }
+
+  return retval;
+}

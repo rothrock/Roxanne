@@ -92,6 +92,7 @@ void* keydb_tree(int fd, int64_t pos, struct keydb_column **list) {
     mid->column[0] = '\0'; // Put a terminator at the start of the string.
   } else {
     memcpy(mid->column, buffer->column, KEY_LEN); // otherwise load it up.
+    mid->refcount = buffer->refcount;
   }
 
   // Right
@@ -155,8 +156,8 @@ int composite_delete(int fd, struct keydb_column *tuple) {
     }
     if (node->refcount == 0) { // nothing here. We can't lower refcount below zero.
       free(node);
-      return(-1);
       sem_post(KEYDB_WRITE_LOCK);
+      return(-1);
     }
     pos = node->pos;
     node->refcount--;
@@ -212,7 +213,6 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
   int comparison;
   int64_t next_pos;
   struct keydb_node *buffer;
-  struct stat stat_info;
 
   if ((buffer = malloc(sizeof(struct keydb_node))) == NULL) {
     perror("Call to malloc() failed in keydb_insert.\n");
@@ -358,7 +358,6 @@ int connect_and_add_node(int direction, struct keydb_node* buffer, char column[]
     buffer->right = next_pos;
   }
 
-  buffer->left = next_pos;
   if ((pwrite(fd, buffer, sizeof(struct keydb_node), pos)) == -1) { // point current node to new child.
     perror("Call to pwrite failed in connect_and_add_node.\n");
     return -1;
@@ -369,6 +368,7 @@ int connect_and_add_node(int direction, struct keydb_node* buffer, char column[]
   buffer->pos = next_pos;
   if ((pwrite(fd, buffer, sizeof(struct keydb_node), next_pos)) == -1) { // create the new child.
     perror("Call to pwrite failed in connect_and_add_node.\n");
+    free(buffer);
     return -1;
   }
   free(buffer);

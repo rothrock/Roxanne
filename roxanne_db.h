@@ -87,6 +87,7 @@ struct  db_ptr { // a structure that points to a value in the db file.
 
 struct keydb_column {
   char      column[KEY_LEN];
+  int       refcount;
   struct    keydb_column *next;
 };
 
@@ -110,7 +111,6 @@ sem_t*          HASH_READ_LOCK;
 char            *SHM_BLOCK_BITMAP;
 char            *SHM_HASHBUCKET_BITMAP;
 char            *SHM_KEYDB_BITMAP;
-char            THE_CAVE[4096] = "/var/roxanne";
 int             BLOCK_BITMAP_FD;
 int             KEYDB_FD;
 int             KEYDB_FREELIST_FD;

@@ -22,6 +22,7 @@ THE SOFTWARE.
 
 #include "roxanne_db.h"
 
+char DATA_HOME[4096] = "/var/roxanne";
 
 int main(int argc, char* argv[]) {
 
@@ -45,7 +46,7 @@ int main(int argc, char* argv[]) {
     switch (ch) {
 
       case 'd':
-        sprintf(THE_CAVE, "%s", optarg);
+        sprintf(DATA_HOME, "%s", optarg);
         break;
 
       case 'h':
@@ -65,11 +66,11 @@ int main(int argc, char* argv[]) {
   argc -= optind;
   argv += optind;
 
-  sprintf(keydb_file, "%s/keydb", THE_CAVE);
-  sprintf(keydb_freelist, "%s/keydb_freelist", THE_CAVE);
-  sprintf(db_file, "%s/db", THE_CAVE);
-  sprintf(idx_file, "%s/idx", THE_CAVE);
-  sprintf(block_bitmap_file, "%s/block_bitmap", THE_CAVE);
+  sprintf(keydb_file, "%s/keydb", DATA_HOME);
+  sprintf(keydb_freelist, "%s/keydb_freelist", DATA_HOME);
+  sprintf(db_file, "%s/db", DATA_HOME);
+  sprintf(idx_file, "%s/idx", DATA_HOME);
+  sprintf(block_bitmap_file, "%s/block_bitmap", DATA_HOME);
   
 
   // Create our global write lock for the db and the block bitmap.
@@ -110,7 +111,7 @@ int main(int argc, char* argv[]) {
 
 
   // Memory-map our block-bitmap file.
-  // Add some logic to create the file if it doesn't exist.
+  // Create the file if it doesn't exist.
   if ((BLOCK_BITMAP_FD = open(block_bitmap_file, O_RDWR | O_CREAT, 0666)) == -1) {
     fprintf(stderr, "Couldn't open block bitmap file %s\n", block_bitmap_file);
     perror(NULL);
@@ -345,7 +346,8 @@ int create_block_reservation(int blocks_needed) {
 }
 
 struct db_ptr find_db_ptr(char* key) {
-  // returns an offset in the index for the given key.
+  // Attempts to find the key in the hash table and return a structure
+  // that points to the record in the db file.
   int       hash_id = get_hash_val(HASH_BITS, key);
   struct    idx index_rec = {};
   struct    db_ptr db_rec = {.block_offset = -1, .blocks = -1};
@@ -1050,7 +1052,7 @@ int keydb_txlog_reset() {
   int pid = getpid();
   char log_file[4096];
 
-  snprintf(log_file, (4096 - sizeof(int)), "%s/%d.txlog", THE_CAVE, pid);
+  snprintf(log_file, (4096 - sizeof(int)), "%s/%d.txlog", DATA_HOME, pid);
   
  if ((retval = open(log_file, O_TRUNC | O_APPEND | O_CREAT, 0666)) == -1) {
       fprintf(stderr, "Couldn't open tx_log %s\n", log_file);

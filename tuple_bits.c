@@ -147,30 +147,39 @@ int composite_delete(int fd, struct keydb_column *tuple) {
   int64_t pos = 0;
   struct keydb_node *node;
 
-  sem_wait(KEYDB_WRITE_LOCK);
+  //sem_wait(KEYDB_WRITE_LOCK);
   while (tuple) {
+    keydb_lock(pos); // Lock the tree we're deleting from.
     node = keydb_find(fd, tuple->column, pos);
     if (node == NULL) {
-      sem_post(KEYDB_WRITE_LOCK);
+      //sem_post(KEYDB_WRITE_LOCK);
+      keydb_unlock(pos);
       return -1;
     }
     if (node->refcount == 0) { // nothing here. We can't lower refcount below zero.
       free(node);
-      sem_post(KEYDB_WRITE_LOCK);
+      //sem_post(KEYDB_WRITE_LOCK);
+      keydb_unlock(pos);
       return(-1);
     }
+    keydb_unlock(pos);
     pos = node->pos;
+    keydb_lock(pos);
     node->refcount--;
     if ((pwrite(fd, node, sizeof(struct keydb_node), pos)) == -1) {
       fprintf(stderr, "Problem writing node at %llu in composite_delete().\n", pos);
+      keydb_unlock(pos);
+      return(-1);
+      free(node);
     };
+    keydb_unlock(pos);
     pos = node->next;  
     tuple = tuple->next;
     free(node);
 
   }
 
-  sem_post(KEYDB_WRITE_LOCK);
+  //sem_post(KEYDB_WRITE_LOCK);
   return 0;
 }    
 
@@ -179,25 +188,32 @@ int composite_insert(int fd, struct keydb_column *tuple) {
   // Inserts the given list of key components into the keydb.
 
   int64_t pos = 0;
+  int64_t previous_pos = 0;
 
-  sem_wait(KEYDB_WRITE_LOCK);
+  //sem_wait(KEYDB_WRITE_LOCK);
+  keydb_lock(pos);
+  previous_pos = pos;
   pos = keydb_insert(fd, tuple->column, pos, false);
+  keydb_unlock(previous_pos);
   if (pos == -1) {
-    sem_post(KEYDB_WRITE_LOCK);
+    //sem_post(KEYDB_WRITE_LOCK);
     return -1;
   }
   tuple = tuple->next;  
 
   while (tuple) {
+    keydb_lock(pos);
+    previous_pos = pos;
     pos = keydb_insert(fd, tuple->column, pos, true);
+    keydb_unlock(previous_pos);
     if (pos == -1){
-      sem_post(KEYDB_WRITE_LOCK);
+      //sem_post(KEYDB_WRITE_LOCK);
       return -1;
     }
     tuple = tuple->next;
   };
 
-  sem_post(KEYDB_WRITE_LOCK);
+  //sem_post(KEYDB_WRITE_LOCK);
   return 0;
 }    
 
@@ -215,7 +231,7 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
   struct keydb_node *buffer;
 
   if ((buffer = malloc(sizeof(struct keydb_node))) == NULL) {
-    perror("Call to malloc() failed in keydb_insert.\n");
+    perror("Call to malloc() failed in keydb_insert.");
     return -1;
   }
 
@@ -223,7 +239,7 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
 
   n = pread(fd, buffer, sizeof(struct keydb_node), pos);
   if (n == -1) {
-    perror("pread() failed in keydb_insert.\n");
+    perror("pread() failed in keydb_insert.");
     free(buffer);
     return -1;
   }
@@ -243,12 +259,20 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
       }
 
       buffer->next = next_pos;
-      pwrite(fd, buffer, sizeof(struct keydb_node), pos);
+      if (pwrite(fd, buffer, sizeof(struct keydb_node), pos) == -1) {
+        perror("pwrite() failed in keydb_insert.");
+        free(buffer);
+        return -1;
+      }  
       bzero(buffer, sizeof(struct keydb_node));
       strcpy(buffer->column, column);
       buffer->refcount = 1;
       buffer->pos = next_pos;
-      pwrite(fd, buffer, sizeof(struct keydb_node), next_pos);
+      if (pwrite(fd, buffer, sizeof(struct keydb_node), next_pos) == -1) {
+        perror("pwrite() failed in keydb_insert.");
+        free(buffer);
+        return -1;
+      }
       free(buffer);
       return next_pos;
 
@@ -268,7 +292,11 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
     memcpy(buffer->column, column, KEY_LEN);
     buffer->refcount = 1;
     buffer->pos = pos;
-    pwrite(fd, buffer, sizeof(struct keydb_node), pos);
+    if (pwrite(fd, buffer, sizeof(struct keydb_node), pos) == -1) {
+      perror("pwrite() failed in keydb_insert.");
+      free(buffer);
+      return -1;
+    }
     free(buffer);
     return pos;
   }
@@ -307,7 +335,11 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
   } else { // we match the node here. Simply up the refcount.
 
     buffer->refcount++;
-    pwrite(fd, buffer, sizeof(struct keydb_node), pos);
+    if (pwrite(fd, buffer, sizeof(struct keydb_node), pos) == -1) {
+      perror("pwrite() failed in keydb_insert.");
+      free(buffer);
+      return -1;
+    }
     free(buffer);
     return pos;
   
@@ -317,17 +349,22 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
 }
 
 
-int find_free_key_node(int keydb_fd) {
+int find_free_key_node(int fd) {
   // The hope is that one day there will be a freelist of returned keydb
   // blocks that we re-use. For now, this is a placeholder.
 
   uint64_t pos = 0;
-
+  struct keydb_node buffer = {};
   if (pos == 0) { // Nothing on the freelist. Add at the end of the keydb file.
-    if ((pos = lseek(keydb_fd, 0, SEEK_END)) == -1) {
+    if ((pos = lseek(fd, 0, SEEK_END)) == -1) {
       perror("lseek failed in find_free_key_node\n");
       return -1;
     } else {
+      //extend the file by one buffer length.
+      if (pwrite(fd, &buffer, sizeof(buffer), pos) == -1) {
+        perror("pwrite() failed in keydb_insert.");
+        return -1;
+      }
       return pos;
     }
   }

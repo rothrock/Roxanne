@@ -68,7 +68,7 @@ THE SOFTWARE.
 #define HASH_BITS 16
 #define IDX_ENTRY_SIZE 1024
 #define KEY_LEN (IDX_ENTRY_SIZE - 2*(sizeof(int)) - sizeof(int64_t))
-#define KEYDB_BUCKETS 1024
+#define KEYDB_LOCKS 1024
 
 
 struct idx { // structure for an index record.
@@ -103,11 +103,10 @@ struct keydb_node {
 
 
 // Globals
-sem_t*          DB_WRITE_LOCK;
-sem_t*          KEYDB_WRITE_LOCK;
-sem_t*          IDX_WRITE_LOCK;
-sem_t*          HASH_WRITE_LOCK;
-sem_t*          HASH_READ_LOCK;
+sem_t*          BLOCK_BITMAP_LOCK;
+sem_t*          HASHBUCKET_LOCK;
+sem_t*          KEYDB_LOCK;
+sem_t*          IDX_APPEND_LOCK;
 char            *SHM_BLOCK_BITMAP;
 char            *SHM_HASHBUCKET_BITMAP;
 char            *SHM_KEYDB_BITMAP;

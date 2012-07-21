@@ -73,45 +73,36 @@ int main(int argc, char* argv[]) {
   sprintf(block_bitmap_file, "%s/block_bitmap", DATA_HOME);
   
 
-  // Create our global write lock for the db and the block bitmap.
-  // This is used to make sure that only one process at a time can 
-  // change the block bitmap.
-  if ((DB_WRITE_LOCK = sem_open("db_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
+  // Used to coordinate exclusive access to the block bitmap.
+  if ((BLOCK_BITMAP_LOCK = sem_open("block_bitmap_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
+    
+    exit(-1);
+  }
+  sem_post(BLOCK_BITMAP_LOCK);
+
+  // Used to coordinate exclusive access to the bitmap array of keydb locks.
+  if ((KEYDB_LOCK = sem_open("keydb_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
     perror("semaphore init failed");
     exit(-1);
   }
-  sem_post(DB_WRITE_LOCK);
+  sem_post(KEYDB_LOCK);
 
-  if ((KEYDB_WRITE_LOCK = sem_open("keydb_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
+  // This is used to safely append to the end of the index file.
+  if ((IDX_APPEND_LOCK = sem_open("idx_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
     perror("semaphore init failed");
     exit(-1);
   }
-  sem_post(KEYDB_WRITE_LOCK);
+  sem_post(IDX_APPEND_LOCK);
 
-  // Create our global write lock for the index file.
-  // This is used to safely append to the end of the file.
-  if ((IDX_WRITE_LOCK = sem_open("idx_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
+  // Used to coordinate exclusive access to the bitmap array of hash key space locks. 
+  if ((HASHBUCKET_LOCK = sem_open("hashbucket_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
     perror("semaphore init failed");
     exit(-1);
   }
-  sem_post(IDX_WRITE_LOCK);
+  sem_post(HASHBUCKET_LOCK);
 
-  if ((HASH_WRITE_LOCK = sem_open("hash_write_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
-    perror("semaphore init failed");
-    exit(-1);
-  }
-  sem_post(HASH_WRITE_LOCK);
-
-
-  if ((HASH_READ_LOCK = sem_open("hash_read_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
-    perror("semaphore init failed");
-    exit(-1);
-  }
-  sem_post(HASH_READ_LOCK);
-
-
-  // Memory-map our block-bitmap file.
-  // Create the file if it doesn't exist.
+  // Memory-map our block bitmap file creating it if necessary.
+  // The block bitmap keeps track of free/busy blocks in the db file.
   if ((BLOCK_BITMAP_FD = open(block_bitmap_file, O_RDWR | O_CREAT, 0666)) == -1) {
     fprintf(stderr, "Couldn't open block bitmap file %s\n", block_bitmap_file);
     perror(NULL);
@@ -122,16 +113,17 @@ int main(int argc, char* argv[]) {
     exit(-1);
   }
   
-  // A mem-mapped block of anonymous memory used to lock parts of the hash key space. 
+  // A mem-mapped block of anonymous memory used to lock parts of the database index.
   // See hash_write_lock() and hash_write_unlock()
   if ((SHM_HASHBUCKET_BITMAP = mmap((caddr_t)0, ((1<<HASH_BITS)/8), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0)) == MAP_FAILED) {
     perror("Problem mmapping the hash bitmap");
     exit(-1);
   }
   
-  // A mem-mapped block of anonymous memory used to lock parts of the keydb space.
-  if ((SHM_KEYDB_BITMAP = mmap((caddr_t)0, ((KEYDB_BUCKETS)/8), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0)) == MAP_FAILED) {
-    perror("Problem mmapping the keydb bitmap");
+  // A mem-mapped block of anonymous memory used to lock parts of the keydb tree.
+  // See keydb_lock() and keydb_unlock()
+  if ((SHM_KEYDB_BITMAP = mmap((caddr_t)0, ((KEYDB_LOCKS)/8), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0)) == MAP_FAILED) {
+    perror("Problem mmapping the keydb lock bitmap");
     exit(-1);
   }
   
@@ -229,9 +221,9 @@ void sigterm_handler_child(int s)
 }
 
 void cleanup_and_exit() {
-  sem_post(DB_WRITE_LOCK);
-  sem_post(IDX_WRITE_LOCK);
-  sem_post(HASH_WRITE_LOCK);
+  sem_post(BLOCK_BITMAP_LOCK);
+  sem_post(IDX_APPEND_LOCK);
+  sem_post(HASHBUCKET_LOCK);
   msync(SHM_BLOCK_BITMAP, BLOCK_BITMAP_BYTES, MS_SYNC);
   close(IDX_FD);
   close(DB_FD); 
@@ -302,11 +294,11 @@ void release_block_reservation(int block_offset, int blocks_used) {
 
   int j;
 
-  sem_wait(DB_WRITE_LOCK);
+  sem_wait(BLOCK_BITMAP_LOCK);
 
   for (j = 0; j < blocks_used; j++) bit_array_clear(SHM_BLOCK_BITMAP, block_offset + j);  
 
-  sem_post(DB_WRITE_LOCK);
+  sem_post(BLOCK_BITMAP_LOCK);
 
 }
 
@@ -317,7 +309,7 @@ int create_block_reservation(int blocks_needed) {
   bool found = false;
   int retval = -1;
 
-  sem_wait(DB_WRITE_LOCK);
+  sem_wait(BLOCK_BITMAP_LOCK);
 
   for (j = 0; j < MAX_BLOCKS; j++) {
     for (i = 0; i < blocks_needed; i++) { 
@@ -340,7 +332,7 @@ int create_block_reservation(int blocks_needed) {
 
   msync(SHM_BLOCK_BITMAP, BLOCK_BITMAP_BYTES, MS_SYNC); // commit the whole block bitmap to disk
 
-  sem_post(DB_WRITE_LOCK);
+  sem_post(BLOCK_BITMAP_LOCK);
 
   return(retval);
 }
@@ -457,13 +449,11 @@ int write_index(char* key, int block_offset, int length) {
       
     // Since we are here, the test above failed. The current index record is in use.
     // If the 'next' pointer is 0, we can just create a new index record for ourself.
-    
-
     if (index_rec.next == 0) { // no next index record in the chain. create one.
 
       // Lock the index file.
       // we don't want to compete with someone else for appending to the index file.
-      if (sem_wait(IDX_WRITE_LOCK) == -1) {
+      if (sem_wait(IDX_APPEND_LOCK) == -1) {
         perror("call to sem_wait in write_index failed.\n");
         return(-1);
       }
@@ -476,7 +466,7 @@ int write_index(char* key, int block_offset, int length) {
       index_rec.length = length;
       strncpy(index_rec_ptr->key, key, KEY_LEN - 1);
       pwrite(IDX_FD, (void*)index_rec_ptr, IDX_ENTRY_SIZE, pos); // add a new index entry.
-      sem_post(IDX_WRITE_LOCK);
+      sem_post(IDX_APPEND_LOCK);
       return 0;
     }
 
@@ -526,7 +516,7 @@ int delete_record(char* key) {
   int         hash_id = get_hash_val(HASH_BITS, key);
   
   // lock this part of the key-space to make the delete atomic.
-  // No one can be creating this key while we are deleting it..
+  // No one can be creating this key while we are deleting it.
   hash_write_lock(hash_id);
 
   pos = find(key);
@@ -788,21 +778,21 @@ int get_hash_val(int bits, char* key) {
 
 void hash_write_lock(int hash_number) {
   while (1) {
-    sem_wait(HASH_WRITE_LOCK);
+    sem_wait(HASHBUCKET_LOCK);
     if ((bit_array_test(SHM_HASHBUCKET_BITMAP, hash_number)) == 0) {
       bit_array_set(SHM_HASHBUCKET_BITMAP, hash_number);
-      sem_post(HASH_WRITE_LOCK);
+      sem_post(HASHBUCKET_LOCK);
       break;
     }
-    sem_post(HASH_WRITE_LOCK);
+    sem_post(HASHBUCKET_LOCK);
   }
 }
 
 
 void hash_write_unlock(int hash_number) {
-  sem_wait(HASH_WRITE_LOCK);
+  sem_wait(HASHBUCKET_LOCK);
   bit_array_clear(SHM_HASHBUCKET_BITMAP, hash_number);
-  sem_post(HASH_WRITE_LOCK);
+  sem_post(HASHBUCKET_LOCK);
 
 }
 

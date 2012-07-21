@@ -1,5 +1,10 @@
 To build the software:
 
+This software links against the libunistring library.
+  http://www.gnu.org/software/libunistring/
+  http://ftp.gnu.org/gnu/libunistring/libunistring-0.9.3.tar.gz
+
+
 $ make
 
 To install it:

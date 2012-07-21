@@ -9,13 +9,13 @@ void keydb_lock(int64_t pos) {
   hash_number = get_hash_val(10, key); // 2^10 = 1024. See SHM_KEYDB_BITMAP.
 
   while (1) {
-    sem_wait(KEYDB_WRITE_LOCK);
+    sem_wait(KEYDB_LOCK);
     if ((bit_array_test(SHM_KEYDB_BITMAP, hash_number)) == 0) {
       bit_array_set(SHM_KEYDB_BITMAP, hash_number);
-      sem_post(KEYDB_WRITE_LOCK);
+      sem_post(KEYDB_LOCK);
       break;
     }
-    sem_post(HASH_WRITE_LOCK);
+    sem_post(KEYDB_LOCK);
   }
 
 }
@@ -28,9 +28,9 @@ void keydb_unlock(int64_t pos) {
   sprintf(key, "%llu", pos); // turn pos into a string.
   hash_number = get_hash_val(10, key); // 2^10 = 1024. See SHM_KEYDB_BITMAP.
 
-  sem_wait(KEYDB_WRITE_LOCK); 
+  sem_wait(KEYDB_LOCK); 
   bit_array_clear(SHM_KEYDB_BITMAP, hash_number);
-  sem_post(KEYDB_WRITE_LOCK);
+  sem_post(KEYDB_LOCK);
 
 }
 
@@ -147,18 +147,18 @@ int composite_delete(int fd, struct keydb_column *tuple) {
   int64_t pos = 0;
   struct keydb_node *node;
 
-  //sem_wait(KEYDB_WRITE_LOCK);
+  //sem_wait(KEYDB_LOCK);
   while (tuple) {
     keydb_lock(pos); // Lock the tree we're deleting from.
     node = keydb_find(fd, tuple->column, pos);
     if (node == NULL) {
-      //sem_post(KEYDB_WRITE_LOCK);
+      //sem_post(KEYDB_LOCK);
       keydb_unlock(pos);
       return -1;
     }
     if (node->refcount == 0) { // nothing here. We can't lower refcount below zero.
       free(node);
-      //sem_post(KEYDB_WRITE_LOCK);
+      //sem_post(KEYDB_LOCK);
       keydb_unlock(pos);
       return(-1);
     }
@@ -179,7 +179,7 @@ int composite_delete(int fd, struct keydb_column *tuple) {
 
   }
 
-  //sem_post(KEYDB_WRITE_LOCK);
+  //sem_post(KEYDB_LOCK);
   return 0;
 }    
 
@@ -190,13 +190,13 @@ int composite_insert(int fd, struct keydb_column *tuple) {
   int64_t pos = 0;
   int64_t previous_pos = 0;
 
-  //sem_wait(KEYDB_WRITE_LOCK);
+  //sem_wait(KEYDB_LOCK);
   keydb_lock(pos);
   previous_pos = pos;
   pos = keydb_insert(fd, tuple->column, pos, false);
   keydb_unlock(previous_pos);
   if (pos == -1) {
-    //sem_post(KEYDB_WRITE_LOCK);
+    //sem_post(KEYDB_LOCK);
     return -1;
   }
   tuple = tuple->next;  
@@ -207,13 +207,13 @@ int composite_insert(int fd, struct keydb_column *tuple) {
     pos = keydb_insert(fd, tuple->column, pos, true);
     keydb_unlock(previous_pos);
     if (pos == -1){
-      //sem_post(KEYDB_WRITE_LOCK);
+      //sem_post(KEYDB_LOCK);
       return -1;
     }
     tuple = tuple->next;
   };
 
-  //sem_post(KEYDB_WRITE_LOCK);
+  //sem_post(KEYDB_LOCK);
   return 0;
 }    
 

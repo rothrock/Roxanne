@@ -1,10 +1,5 @@
 To build the software:
 
-This software links against the libunistring library.
-  http://www.gnu.org/software/libunistring/
-  http://ftp.gnu.org/gnu/libunistring/libunistring-0.9.3.tar.gz
-
-
 $ make
 
 To install it:
@@ -138,3 +133,131 @@ Data manipulation commands:
 Other commands:
 
   quit
+
+
+--------------
+On Disk
+--------------
+
+The initial and maximum sizes are hard-coded in the application along
+with the units of growth and storage. Eventually, these will become
+configurable options. For now, it's just simpler this way.
+
+Roxanne's persistent storage lives in /var/roxanne by default.
+
+    $ du -skh /var/roxanne/*
+    128M  /var/roxanne/block_bitmap
+     64K  /var/roxanne/db
+     64M  /var/roxanne/idx
+     24K  /var/roxanne/keydb
+      0B  /var/roxanne/keydb_freelist
+
+
+### The Block Bitmap (/var/roxanne/block_bitmap)
+
+Each _bit_ in this file corresponds to a 4 KB block in the 'db' file.
+Roxanne processes memory-map this file and use it keep track of used
+and free blocks. Only one process may update the block bitmap at any
+time.  The block bitmap file provides a way to very quickly find and
+reserve a contiguous set of blocks to store values.The block_bitmap
+file is regularly flushed to disk with msync() after each reservation
+request. The size of the block bitmap file is fixed at 128MB which is
+enough space to keep track of 1,073,741,824 blocks. 
+
+### The database (/var/roxanne/db)
+
+All values are stored in the db file.  The unit of storage in the 'db'
+file is the block, and  all blocks are 4KB. 
+
+The db file starts out small and grows as more values are added to the
+the database. All values inserted into the database are stored in
+contiguous blocks. This simplifies the code, and provides for fast access,
+but some fragmentation will occur over time if the database serves lots
+of reads and writes of varying size.
+
+#### The hash index (/var/roxanne/idx)
+
+Initially sized at 64 megabytes, the hash index stores the full, composite
+keys for values in the db file. An entry in the index is comprised of a
+key stored as a string, an integer that represents a byte-offset in the
+db file, an integer representing the length in bytes of the value, and
+a third integer that represents a byte-offset in the idx file for
+chaining additional keys. 
+
+Hash collisions are resolved by the separate chaining method. Each
+index entry is 1024 bytes, so the hash table has 65,536 slots. When a 
+collision occurs, the colliding key is appended to the end if the index
+file and the key in the slot where the collision occurred has its
+'next' pointer updated to be the byte-offest in the index file where
+the append occurred.
+
+#### The keydb (/var/roxanne/keydb)
+
+Initially sized at 0 bytes, the keydb stores the composite key hierarchy.
+Each level of the hierarchy is a simple, binary tree of the
+
+Each node in the hierarchy has: a key-part, a left pointer (less-than),
+a right pointer (greater-than), and a next pointer that points to the
+next level in the hierarchy. 
+
+Nodes have a reference count, so duplicate key-parts don't require
+additional space. Unfortunately, the database does not yet support
+reclamation of keydb nodes with a reference count of 0.
+
+##### Example
+
+Consider the following two composite keys (values left off):
+
+/foo/bar/toast
+/foo/bar/jam
+
+This set of two composite keys comprises 4 nodes in the keydb, stored
+like so:
+
+key    refcount    next-pointer  left-pointer  right-pointer
+------------------------------------------------------------
+foo       2           bar           NULL          NULL
+bar       2           toast         NULL          NULL
+toast     1           NULL          jam           NULL
+jam       1           NULL          NULL          NULL
+
+
+Next, add these composite keys (again, values left off).
+/foo/bar/whiskey
+/zen
+/zoo
+/egg
+
+The table now looks like this:
+
+key    refcount    next-pointer  left-pointer  right-pointer
+------------------------------------------------------------
+foo       3           bar           egg           zen
+bar       3           toast         NULL          NULL
+toast     1           NULL          jam           whiskey
+jam       1           NULL          NULL          NULL
+whiskey   1           NULL          NULL          NULL
+zen       1           NULL          NULL          zoo
+zoo       1           NULL          NULL          NULL
+egg       1           NULL          NULL          NULL
+
+
+Here is the composite-key space represented graphically:
+
+         +---+foo+----+
+         |     +      |
+         |     |      |
+         |     |      |
+         v     v      v
+        egg   bar    zen+--+
+               +           |
+               |           v
+               |           v
+               v          zoo
+         +--+toast+--+
+         |           |
+         |           |
+         |           |
+         v           v
+        jam        whiskey 
+

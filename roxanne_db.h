@@ -152,3 +152,5 @@ struct    keydb_node* keydb_find(int fd, char *key, int64_t pos);
 void*     keydb_tree(int fd, int64_t pos, struct keydb_column **list); 
 int       find_free_key_node(int keydb_fd);
 int       connect_and_add_node(int direction, struct keydb_node* buffer, char column[], int pos, int fd);
+int       new_subkey_tree(int fd, char column[], int64_t pos, struct keydb_node *buffer);
+void      count_command(char msg[], char response[]);

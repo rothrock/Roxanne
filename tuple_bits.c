@@ -190,13 +190,11 @@ int composite_insert(int fd, struct keydb_column *tuple) {
   int64_t pos = 0;
   int64_t previous_pos = 0;
 
-  //sem_wait(KEYDB_LOCK);
   keydb_lock(pos);
   previous_pos = pos;
   pos = keydb_insert(fd, tuple->column, pos, false);
   keydb_unlock(previous_pos);
   if (pos == -1) {
-    //sem_post(KEYDB_LOCK);
     return -1;
   }
   tuple = tuple->next;  
@@ -207,15 +205,43 @@ int composite_insert(int fd, struct keydb_column *tuple) {
     pos = keydb_insert(fd, tuple->column, pos, true);
     keydb_unlock(previous_pos);
     if (pos == -1){
-      //sem_post(KEYDB_LOCK);
       return -1;
     }
     tuple = tuple->next;
   };
 
-  //sem_post(KEYDB_LOCK);
   return 0;
 }    
+
+
+int new_subkey_tree(int fd, char column[], int64_t pos, struct keydb_node *buffer) {
+  // Create a new subkey tree below the given keydb_node.
+
+  int64_t next_pos;
+
+  if ((next_pos = find_free_key_node(fd)) == -1) {
+    fprintf(stderr, "find_free_key_node_failed.\n");
+    free(buffer);
+    return -1;
+  }
+  buffer->next = next_pos;
+  if (pwrite(fd, buffer, sizeof(struct keydb_node), pos) == -1) {
+    perror("pwrite() failed in new_subkey_tree.");
+    free(buffer);
+    return -1;
+  }  
+  bzero(buffer, sizeof(struct keydb_node));
+  strcpy(buffer->column, column);
+  buffer->refcount = 1;
+  buffer->pos = next_pos;
+  if (pwrite(fd, buffer, sizeof(struct keydb_node), next_pos) == -1) {
+    perror("pwrite() failed in new_subkey_tree.");
+    free(buffer);
+    return -1;
+  }
+  free(buffer);
+  return next_pos;
+}
 
 
 int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
@@ -244,37 +270,15 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
     return -1;
   }
 
-
   if (go_next) {
     if (n == 0) { // We can't go 'next' off a record that doesn't exist.
       fprintf(stderr, "pos is at EOF but we need to read a real record.\n");
       free(buffer);
       return -1;
     }
-    if (buffer->next == 0) { // We're making a new subkey tree.
-      if ((next_pos = find_free_key_node(fd)) == -1) {
-        fprintf(stderr, "find_free_key_node_failed.\n");
-        free(buffer);
-        return -1;
-      }
+    if (buffer->next == 0) {
 
-      buffer->next = next_pos;
-      if (pwrite(fd, buffer, sizeof(struct keydb_node), pos) == -1) {
-        perror("pwrite() failed in keydb_insert.");
-        free(buffer);
-        return -1;
-      }  
-      bzero(buffer, sizeof(struct keydb_node));
-      strcpy(buffer->column, column);
-      buffer->refcount = 1;
-      buffer->pos = next_pos;
-      if (pwrite(fd, buffer, sizeof(struct keydb_node), next_pos) == -1) {
-        perror("pwrite() failed in keydb_insert.");
-        free(buffer);
-        return -1;
-      }
-      free(buffer);
-      return next_pos;
+      return(new_subkey_tree(fd, column, pos, buffer));
 
     } else { // insert our node in the tree that next points to. We're
              // adding a subkey to an existing tree. Calling ourself with
@@ -362,7 +366,7 @@ int find_free_key_node(int fd) {
     } else {
       //extend the file by one buffer length.
       if (pwrite(fd, &buffer, sizeof(buffer), pos) == -1) {
-        perror("pwrite() failed in keydb_insert.");
+        perror("pwrite() failed in find_free_key_node.");
         return -1;
       }
       return pos;

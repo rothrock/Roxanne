@@ -272,15 +272,16 @@ int start_listening(char* host, char* port, int backlog) {
 
 int extract_command(char* msg, int msglen) {
 
-  char* commands[5] = { "create /",      // 0
-                        "read /",        // 1
-                        "delete /",      // 2
-                        "keys /",        // 3
-                        "quit"};         // 4
+  char* commands[6] = { "quit",     // 0 
+                        "create /", // 1     
+                        "read /",   // 2     
+                        "delete /", // 3     
+                        "keys /",   // 4     
+                        "count /"}; // 5    
   int i = 0;
   int cmdlen;
   int max_chars = 0;
-  for (; i < 5; i++) {
+  for (; i < 6; i++) {
     cmdlen = strlen(commands[i]);
     max_chars = msglen < cmdlen ? msglen : cmdlen;
     if (memcmp(commands[i], msg, max_chars) == 0) return(i);
@@ -703,24 +704,29 @@ int guts(int accept_fd, int listen_fd) {
     
     switch (extract_command(msg, msglen))  {
 
-      case 0: // create
+      case 0: // quit
+        cleanup_and_exit();
+        break;
+
+      case 1: // create
         create_command(msg, response);
         break;
 
-      case 1: // read
+      case 2: // read
         read_command(msg, response);
         break;
 
-      case 2: // delete
+      case 3: // delete
         delete_command(msg, response);
         break;
 
-      case 3: // subkeys
+      case 4: // subkeys
         keys_command(msg, response);
         break;
 
-      case 4: // quit
-        cleanup_and_exit();
+      case 5: // count
+        count_command(msg, response);
+        break;
 
       default:
         sprintf(response, "Unknown command.\n");
@@ -996,17 +1002,24 @@ void keys_command(char msg[], char response[]) {
       return;
     }
 
-    if ((node = keydb_find(KEYDB_FD, part, pos))) {
-      pos = node->next;
-      free(node);
-      if (pos == 0) { // There is no next subtree.
-        sprintf(response, "No subkeys.\n");
-        return;
-      }
-    } else {
+    node = keydb_find(KEYDB_FD, part, pos);
+    
+    if (!(node = keydb_find(KEYDB_FD, part, pos))) {
       sprintf(response, "Not found.\n");
       return;
     } 
+
+    if (node->refcount <= 0) {
+      sprintf(response, "Not found.\n");
+      return;
+    } 
+  
+    pos = node->next;
+    free(node);
+    if (pos == 0) { // There is no next subtree.
+      sprintf(response, "No subkeys.\n");
+      return;
+    }
 
   }
 
@@ -1027,6 +1040,58 @@ void keys_command(char msg[], char response[]) {
   return;
 }
 
+void count_command(char msg[], char response[]) {
+
+  char* part = NULL;
+  char key[KEY_LEN] = "";
+  int length = 0;
+  int retval;
+  int refcount = 0;
+  int64_t pos = 0;
+  struct keydb_node *node;
+  struct keydb_column *list, *tmp, *cursor;
+  list = NULL; 
+  part = strtok(msg, "/");
+  
+  for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
+    length += strlen(part);
+    if (length > KEY_LEN - 1) {
+      sprintf(response, "Key too long.\n");
+      part = NULL;
+      return;
+    }
+
+    if ((node = keydb_find(KEYDB_FD, part, pos))) {
+      pos = node->next;
+      refcount = node->refcount;
+      free(node);
+      if (pos == 0) { // There is no next subtree.
+        sprintf(response, "%d\n", refcount);
+        return;
+      }
+    } else {
+      sprintf(response, "Not found.\n");
+      return;
+    } 
+
+  }
+
+  // Sum all the refcounts of all keys in the root tree.
+  // This is for 'count /'.
+  keydb_tree(KEYDB_FD, pos, &list);
+  while (list) {
+    if (list->column[0] != '\0') {
+      refcount += list->refcount;
+    }
+    tmp = list->next;
+    free(list);
+    list = tmp;
+  }
+  
+  sprintf(response, "%d\n", refcount);
+
+  return;
+}
 void usage(char *argv) {
   fprintf(stderr, "usage: %s [-h listen_addr] [-p listen_port] [-d /path/to/db/directory]\n", argv);
   exit(-1);

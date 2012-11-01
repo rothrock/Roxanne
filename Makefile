@@ -5,7 +5,7 @@ OBJDIR := obj
 OBJ := roxanne_db.o tuple_bits.o hash_32.o
 DEPS := roxanne_db.h
 ifeq (${OS},Linux)
-	LIBS := -lrt -lm
+	LIBS := -lrt -lm -lpthread
 endif
 
 default: dbr

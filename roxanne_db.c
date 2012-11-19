@@ -272,16 +272,16 @@ int start_listening(char* host, char* port, int backlog) {
 
 int extract_command(char* msg, int msglen) {
 
-  char* commands[6] = { "quit",     // 0 
+  char* commands[5] = { "quit",     // 0 
                         "create /", // 1     
                         "read /",   // 2     
                         "delete /", // 3     
-                        "keys /",   // 4     
-                        "count /"}; // 5    
+                        "keys /"    // 4     
+                      };
   int i = 0;
   int cmdlen;
   int max_chars = 0;
-  for (; i < 6; i++) {
+  for (; i < 5; i++) {
     cmdlen = strlen(commands[i]);
     max_chars = msglen < cmdlen ? msglen : cmdlen;
     if (memcmp(commands[i], msg, max_chars) == 0) return(i);
@@ -647,13 +647,16 @@ int write_record(char* key, char* value) {
 
 int guts(int accept_fd, int listen_fd) {
   
-  char buffer[512]        = "";   // recv buffer
-  char msg[MSG_SIZE]      = "";   // Holds our incoming and outgoing messages.
+  char buffer[RECV_WINDOW]        = "";   // recv buffer
+  int msgbuflen = MSG_SIZE;
+  char *msg;   // Holds our incoming and outgoing messages.
+  char *tmp_msg;
   void *msg_cursor;
-  char response[MSG_SIZE] = "";   
+  char *response;   
   int msglen              = 0;    // length of the assembled message that we receive.
   int recvlen             = 0;    // how many bytes recv call returns.
   int responselen         = 0;   
+  int offset;
   int retval;
 
   // Re-register the sigterm handler to our cleanup function.
@@ -663,12 +666,14 @@ int guts(int accept_fd, int listen_fd) {
   while (1) {
 
     msglen = 0;
-    bzero(msg, MSG_SIZE);
-    bzero(response, MSG_SIZE);
+    msgbuflen = MSG_SIZE;
+    msg = malloc(sizeof(char) * msgbuflen);
     msg_cursor = (void*)msg;
+    bzero(msg, msgbuflen);
+
 
     // Wait for some data
-    while (((recvlen = recv(accept_fd, (void*)buffer, 512, MSG_PEEK)) == -1) && (errno == EAGAIN));
+    while (((recvlen = recv(accept_fd, (void*)buffer, RECV_WINDOW, MSG_PEEK)) == -1) && (errno == EAGAIN));
     if (recvlen == 0) {
       fprintf(stderr, "Client closed the connection.\n");
       close(accept_fd);
@@ -676,7 +681,7 @@ int guts(int accept_fd, int listen_fd) {
     };
 
     // Receive data from our buffered stream until we would block.
-    while ((recvlen = recv(accept_fd, (void*)buffer, 512, 0)) != -1) {
+    while ((recvlen = recv(accept_fd, (void*)buffer, RECV_WINDOW, 0)) != -1) {
       if (recvlen == 0) {
         fprintf(stderr, "Client closed the connection.\n");
         close(accept_fd);
@@ -689,10 +694,17 @@ int guts(int accept_fd, int listen_fd) {
         cleanup_and_exit(-1);
       };
 
-      if ((msglen += recvlen) > (MSG_SIZE)) {
-        fprintf(stderr, "Message too big.\n");
-        close(accept_fd);
-        cleanup_and_exit(-1);
+      // Extend our message buffer if need be.
+      if ((msglen += recvlen) > (msgbuflen)) {
+        msgbuflen += msgbuflen;
+        offset = msg_cursor - (void*)msg;
+        tmp_msg = malloc(sizeof(char) * msgbuflen);
+        bzero(tmp_msg, msgbuflen);
+        memcpy(tmp_msg, msg, offset);
+        msg_cursor = tmp_msg + offset;
+        free(msg);
+        msg = tmp_msg;
+        fprintf(stderr, "msgbuflen expanded to %d\n", msgbuflen);
       }
 
       memcpy(msg_cursor, (void*)buffer, recvlen);
@@ -709,32 +721,32 @@ int guts(int accept_fd, int listen_fd) {
         break;
 
       case 1: // create
-        create_command(msg, response);
+        response = create_command(msg);
         break;
 
       case 2: // read
-        read_command(msg, response);
+        response = read_command(msg);
         break;
 
       case 3: // delete
-        delete_command(msg, response);
+        response = delete_command(msg);
         break;
 
       case 4: // subkeys
-        keys_command(msg, response);
-        break;
-
-      case 5: // count
-        count_command(msg, response);
+        response = keys_command(msg);
         break;
 
       default:
+        response = malloc(sizeof(char) * MSG_SIZE);
+        bzero(response, MSG_SIZE);
         sprintf(response, "Unknown command.\n");
       
     }
 
     responselen = strlen(response);
     if((send(accept_fd, (void*)response, responselen, 0) == -1)) perror("Send failed");
+    free(msg);
+    free(response);
 
   };
 
@@ -802,7 +814,7 @@ void hash_write_unlock(int hash_number) {
 
 }
 
-void create_command(char msg[], char response[]) {
+char* create_command(char msg[]) {
 
   int length            = 0;
   char* part            = NULL;
@@ -812,8 +824,11 @@ void create_command(char msg[], char response[]) {
   struct keydb_column *tuple = NULL;
   struct keydb_column *head = NULL;
   struct keydb_column *tmp;
+  char* response;
 
-  
+  response = malloc(sizeof(char) * MSG_SIZE);
+  bzero(response, MSG_SIZE);
+
   part = strtok(msg, "/");
 
   for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
@@ -822,14 +837,14 @@ void create_command(char msg[], char response[]) {
       length += strlen(previous_part);
       if (length > KEY_LEN - 1) {
         sprintf(response, "Key too large.\n");
-        return;
+        return response;
       }
 
       // Save away the list of key composites
       if ((tmp = malloc(sizeof(struct keydb_column))) == NULL) {
-        sprintf(response, "Call to malloc() failed in create_command.\n");
+        sprintf(response, "Internal error.");
         perror("Call to malloc() failed in create_command for tuple->next.\n");
-        return;
+        return response;
       }
       strncpy(tmp->column, previous_part, KEY_LEN);
       tmp->next = NULL;
@@ -850,7 +865,7 @@ void create_command(char msg[], char response[]) {
 
   if (key[0] == '\0') {
     sprintf(response, "Failed to get value.\n");
-    return;
+    return response;
   }
 
   retval = write_record(key, previous_part);
@@ -858,14 +873,14 @@ void create_command(char msg[], char response[]) {
     if (composite_insert(KEYDB_FD, head) == -1) {
       delete_record(key); // undo what we did.
       fprintf(stderr, "Composite key insertion failed.\n");
-      sprintf(response, "Write failed. Composite key insertion failed.\n");
+      sprintf(response, "Internal error.");
     } else {
       sprintf(response, "Write OK.\n");
     }
   } else if (retval == -2) { // key already exists.
     sprintf(response, "Write failed. Key exists in the index.\n");
   } else {
-    sprintf(response, "write_record() failed. Don't know why.\n");
+    sprintf(response, "Internal error.");
   }
 
   while (head) { // free our list of key composites.
@@ -873,10 +888,10 @@ void create_command(char msg[], char response[]) {
     free(head);
     head = tmp;
   };
-
+  return response;
 }
 
-void read_command(char msg[], char response[]) {
+char* read_command(char msg[]) {
 
   char* part            = NULL;
   char* value;
@@ -884,6 +899,11 @@ void read_command(char msg[], char response[]) {
   char key[KEY_LEN]     = "";
   int length            = 0;
   struct  db_ptr db_rec;
+  int responselen = 0;
+  char* response;
+
+  response = malloc(sizeof(char) * MSG_SIZE);
+  bzero(response, MSG_SIZE);
 
   part = strtok(msg, "/");
 
@@ -900,21 +920,26 @@ void read_command(char msg[], char response[]) {
 
   if (length == 0) {
     sprintf(response, "Failed to extract key.\n");
-    return;
+    return response;
   }
 
   db_rec = find_db_ptr(key); 
   if (db_rec.block_offset != -1) {
     value = read_record(db_rec);
+    responselen = strlen(value);
+    if (responselen >= MSG_SIZE) { // need to expand response.
+      free(response);
+      response = malloc(sizeof(char) * (responselen + 2));
+    }
     sprintf(response, "%s\n", value);
     free(value);
   } else {
     sprintf(response, "Not found.\n");
   }
-
+  return response;
 }
 
-void delete_command(char msg[], char response[]) {
+char* delete_command(char msg[]) {
 
   char* part            = NULL;
   char key[KEY_LEN]     = "";
@@ -923,6 +948,11 @@ void delete_command(char msg[], char response[]) {
   struct keydb_column *tuple = NULL;
   struct keydb_column *head = NULL;
   struct keydb_column *tmp;
+  int responselen = 0;
+  char* response;
+
+  response = malloc(sizeof(char) * MSG_SIZE);
+  bzero(response, MSG_SIZE);
  
   part = strtok(msg, "/");
 
@@ -937,7 +967,7 @@ void delete_command(char msg[], char response[]) {
     if ((tmp = malloc(sizeof(struct keydb_column))) == NULL) {
       sprintf(response, "Delete failed.\n");
       perror("Call to malloc() failed in delete_command.\n");
-      return;
+      return response;
     }
     strncpy(tmp->column, part, KEY_LEN);
     tmp->next = NULL;
@@ -955,7 +985,7 @@ void delete_command(char msg[], char response[]) {
 
   if (length == 0) {
     sprintf(response, "Failed to extract key.\n");
-    return;
+    return response;
   }
 
   retval = delete_record(key);
@@ -963,14 +993,14 @@ void delete_command(char msg[], char response[]) {
   if (retval == 0) {
     if (composite_delete(KEYDB_FD, head) == -1) {
       fprintf(stderr, "Composite key delete failed.\n");
-      sprintf(response, "Delete failed. Composite key delete failed.\n");
+      sprintf(response, "Composite key delete failed.\n");
     } else {
       sprintf(response, "Delete OK.\n");
     }
   } else if (retval == -2) {
     sprintf(response, "Not found.\n");
   } else {
-    sprintf(response, "Delete failed. Could not delete record.\n");
+    sprintf(response, "Could not delete record.\n");
   } 
 
   while (head) { // free our list of key composites.
@@ -978,10 +1008,10 @@ void delete_command(char msg[], char response[]) {
     free(head);
     head = tmp;
   };
-
+  return response;
 }
 
-void keys_command(char msg[], char response[]) {
+char* keys_command(char msg[]) {
 
   char* part = NULL;
   char key[KEY_LEN] = "";
@@ -992,6 +1022,15 @@ void keys_command(char msg[], char response[]) {
   struct keydb_column *list, *tmp, *cursor;
   bool some_content = false; // Does our key list have any keys in it?
   list = NULL; 
+  char* response;
+  char* tmp_response;
+  int response_free_bytes = MSG_SIZE;
+  int responselen = 0;
+  int column_size;
+
+  response = malloc(sizeof(char) * MSG_SIZE);
+  bzero(response, MSG_SIZE);
+
   part = strtok(msg, "/");
   
   for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
@@ -999,26 +1038,26 @@ void keys_command(char msg[], char response[]) {
     if (length > KEY_LEN - 1) {
       sprintf(response, "Key too long.\n");
       part = NULL;
-      return;
+      return response;
     }
 
     node = keydb_find(KEYDB_FD, part, pos);
     
     if (!(node = keydb_find(KEYDB_FD, part, pos))) {
       sprintf(response, "Not found.\n");
-      return;
+      return response;
     } 
 
     if (node->refcount <= 0) {
       sprintf(response, "Not found.\n");
-      return;
+      return response;
     } 
   
     pos = node->next;
     free(node);
     if (pos == 0) { // There is no next subtree.
       sprintf(response, "No subkeys.\n");
-      return;
+      return response;
     }
 
   }
@@ -1026,6 +1065,17 @@ void keys_command(char msg[], char response[]) {
   keydb_tree(KEYDB_FD, pos, &list);
   while (list) {
     if (list->column[0] != '\0') {
+      column_size = strlen(list->column) + 2;
+      response_free_bytes -= column_size;
+      if (response_free_bytes < 1) { // need to expand response.
+        responselen = strlen(response);
+        responselen += column_size;
+        tmp_response = malloc(sizeof(char) * responselen);
+        strcpy(tmp_response, response);
+        free(response);
+        response = tmp_response;
+        response_free_bytes = 0;
+      }
       strcat(response, list->column);
       strcat(response, "\n");
       some_content = true;
@@ -1037,7 +1087,7 @@ void keys_command(char msg[], char response[]) {
   
   if (!some_content) sprintf(response, "No subkeys.\n");
 
-  return;
+  return response;
 }
 
 void count_command(char msg[], char response[]) {

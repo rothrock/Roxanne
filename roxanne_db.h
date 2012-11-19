@@ -64,7 +64,11 @@ THE SOFTWARE.
 #define BLOCK_SIZE 4096
 #define MAX_BLOCKS 1073741824
 #define BLOCK_BITMAP_BYTES 134217728
-#define MSG_SIZE 65536
+
+// Default starting message size.
+// MSG_SIZE must be larger than RECV_WINDOW
+#define MSG_SIZE 48
+#define RECV_WINDOW 32
 #define HASH_BITS 16
 #define IDX_ENTRY_SIZE 1024
 #define KEY_LEN (IDX_ENTRY_SIZE - 2*(sizeof(int)) - sizeof(int64_t))
@@ -140,10 +144,10 @@ void      hash_write_lock(int hash_number);
 void      hash_write_unlock(int hash_number);
 void      cleanup_and_exit();
 void      usage(char *argv);
-void      create_command(char msg[], char response[]);
-void      read_command(char msg[], char response[]);
-void      delete_command(char msg[], char response[]);
-void      keys_command(char msg[], char response[]);
+char*     create_command(char msg[]);
+char*     read_command(char msg[]);
+char*     delete_command(char msg[]);
+char*     keys_command(char msg[]);
 int       keydb_insert(int fd, char column[], int64_t pos, bool go_next);
 void      keydb_lock(int64_t pos);
 void      keydb_unlock(int64_t pos);
@@ -153,4 +157,3 @@ void*     keydb_tree(int fd, int64_t pos, struct keydb_column **list);
 int       find_free_key_node(int keydb_fd);
 int       connect_and_add_node(int direction, struct keydb_node* buffer, char column[], int pos, int fd);
 int       new_subkey_tree(int fd, char column[], int64_t pos, struct keydb_node *buffer);
-void      count_command(char msg[], char response[]);

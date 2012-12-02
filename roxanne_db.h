@@ -67,12 +67,13 @@ THE SOFTWARE.
 
 // Default starting message size.
 // MSG_SIZE must be larger than RECV_WINDOW
-#define MSG_SIZE 48
-#define RECV_WINDOW 32
+#define MSG_SIZE 1024
+#define RECV_WINDOW 512
 #define HASH_BITS 16
 #define IDX_ENTRY_SIZE 1024
 #define KEY_LEN (IDX_ENTRY_SIZE - 2*(sizeof(int)) - sizeof(int64_t))
 #define KEYDB_LOCKS 1024
+#define MAX_ARGS 100
 
 
 struct idx { // structure for an index record.
@@ -130,7 +131,8 @@ void      sigterm_handler_parent(int s);
 void      sigterm_handler_child(int s);
 int       get_hash_val(int bits, char* key);
 int       guts(int accept_fd, int listen_fd);
-int       extract_command(char* msg, int msglen);
+int       extract_command(char *token_vector[], int token_count);
+int       tokenize_command(char* msg, char* token_vector[]);
 int       write_record(char* key, char* data);
 int       write_index(char* key, int block_offset, int length);
 int       parse_create(char msg[], int msglen, char** key, char** value);
@@ -144,10 +146,10 @@ void      hash_write_lock(int hash_number);
 void      hash_write_unlock(int hash_number);
 void      cleanup_and_exit();
 void      usage(char *argv);
-char*     create_command(char msg[]);
-char*     read_command(char msg[]);
-char*     delete_command(char msg[]);
-char*     keys_command(char msg[]);
+char*     create_command(char* token_vector[], int token_count);
+char*     read_command(char* token_vector[], int token_count);
+char*     delete_command(char* token_vector[], int token_count);
+char*     keys_command(char* token_vector[], int token_count);
 int       keydb_insert(int fd, char column[], int64_t pos, bool go_next);
 void      keydb_lock(int64_t pos);
 void      keydb_unlock(int64_t pos);

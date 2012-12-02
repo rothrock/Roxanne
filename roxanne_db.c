@@ -75,7 +75,7 @@ int main(int argc, char* argv[]) {
 
   // Used to coordinate exclusive access to the block bitmap.
   if ((BLOCK_BITMAP_LOCK = sem_open("block_bitmap_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
-    
+    perror("semaphore init failed");
     exit(-1);
   }
   sem_post(BLOCK_BITMAP_LOCK);
@@ -270,24 +270,32 @@ int start_listening(char* host, char* port, int backlog) {
 
 }
 
-int extract_command(char* msg, int msglen) {
+int tokenize_command(char* msg, char* token_vector[]) {
+  char **token_ptr;
+  int i = 0;
+  for (token_ptr = token_vector; (*token_ptr = strsep(&msg, " \t")) != NULL;)
+    if (**token_ptr != '\0') {
+        i++; 
+        if (++token_ptr >= &token_vector[MAX_ARGS])
+          return -1;
+    }
+  return i;
+}
 
-  char* commands[5] = { "quit",     // 0 
-                        "create /", // 1     
-                        "read /",   // 2     
-                        "delete /", // 3     
-                        "keys /"    // 4     
+
+int extract_command(char *token_vector[], int token_count) {
+
+  char* commands[5] = { "quit",   // 0 
+                        "create", // 1     
+                        "read",   // 2     
+                        "delete", // 3     
+                        "keys"    // 4     
                       };
   int i = 0;
-  int cmdlen;
-  int max_chars = 0;
-  for (; i < 5; i++) {
-    cmdlen = strlen(commands[i]);
-    max_chars = msglen < cmdlen ? msglen : cmdlen;
-    if (memcmp(commands[i], msg, max_chars) == 0) return(i);
-  }
-  
-  return(-1);
+  if (token_count < 1) return -1;
+  for (; i < 5; i++)
+    if (strcmp(commands[i], token_vector[0]) == 0) return(i);
+  return -1;
 }
 
 
@@ -650,6 +658,7 @@ int guts(int accept_fd, int listen_fd) {
   char buffer[RECV_WINDOW]        = "";   // recv buffer
   int msgbuflen = MSG_SIZE;
   char *msg;   // Holds our incoming and outgoing messages.
+  char * msg_copy;
   char *tmp_msg;
   void *msg_cursor;
   char *response;   
@@ -658,6 +667,8 @@ int guts(int accept_fd, int listen_fd) {
   int responselen         = 0;   
   int offset;
   int retval;
+  char* token_vector[MAX_ARGS] = {'\0'};
+  int token_count = 0;
 
   // Re-register the sigterm handler to our cleanup function.
   signal(SIGTERM, sigterm_handler_child);
@@ -709,31 +720,35 @@ int guts(int accept_fd, int listen_fd) {
 
       memcpy(msg_cursor, (void*)buffer, recvlen);
       msg_cursor += recvlen;
-      if (memchr((void*)buffer, '\r', recvlen)) break; // Got a terminator character. Go process our message.
       if (memchr((void*)buffer, '\n', recvlen)) break; // Got a terminator character. Go process our message.
 
     } 
-    
-    switch (extract_command(msg, msglen))  {
+
+    msg_copy = msg;
+    strsep(&msg_copy, "\r\n");
+
+    token_count = tokenize_command(msg, token_vector);
+
+    switch (extract_command(token_vector, token_count))  {
 
       case 0: // quit
         cleanup_and_exit();
         break;
 
       case 1: // create
-        response = create_command(msg);
+        response = create_command(token_vector, token_count);
         break;
 
       case 2: // read
-        response = read_command(msg);
+        response = read_command(token_vector, token_count);
         break;
 
       case 3: // delete
-        response = delete_command(msg);
+        response = delete_command(token_vector, token_count);
         break;
 
       case 4: // subkeys
-        response = keys_command(msg);
+        response = keys_command(token_vector, token_count);
         break;
 
       default:
@@ -814,9 +829,10 @@ void hash_write_unlock(int hash_number) {
 
 }
 
-char* create_command(char msg[]) {
+char* create_command(char* token_vector[], int token_count) {
 
   int length            = 0;
+  int i = 0;
   char* part            = NULL;
   char* previous_part   = NULL;
   int retval            = 0;
@@ -829,9 +845,12 @@ char* create_command(char msg[]) {
   response = malloc(sizeof(char) * MSG_SIZE);
   bzero(response, MSG_SIZE);
 
-  part = strtok(msg, "/");
+  if (token_count < 3) {
+    sprintf(response, "Not enough arguments.\n");
+    return response;
+  }
 
-  for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
+  for (i = 1; (part = token_vector[i]) && (i < MAX_ARGS); i++) {
 
     if (previous_part != NULL) {
       length += strlen(previous_part);
@@ -856,7 +875,6 @@ char* create_command(char msg[]) {
         tuple = tuple->next;
         tuple->next = NULL;
       }
-      strcat(key, "/");
       strcat(key, previous_part);
 
     }
@@ -891,37 +909,33 @@ char* create_command(char msg[]) {
   return response;
 }
 
-char* read_command(char msg[]) {
+char* read_command(char* token_vector[], int token_count) {
 
-  char* part            = NULL;
+  char* part = NULL;
   char* value;
-  int retval            = 0;
-  char key[KEY_LEN]     = "";
-  int length            = 0;
-  struct  db_ptr db_rec;
+  int retval = 0;
+  char key[KEY_LEN] = "";
+  int length = 0;
+  struct db_ptr db_rec;
   int responselen = 0;
+  int i;
   char* response;
 
   response = malloc(sizeof(char) * MSG_SIZE);
   bzero(response, MSG_SIZE);
 
-  part = strtok(msg, "/");
-
-  for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
-    length += strlen(part);
-    if (length > KEY_LEN - 1) {
-      sprintf(response, "Key too long.\n");
-      part = NULL;
-      break;
-    }
-    strcat(key, "/");
-    strcat(key, part);
-  } 
-
-  if (length == 0) {
-    sprintf(response, "Failed to extract key.\n");
+  if (token_count == 1) {
+    sprintf(response, "No keys supplied.\n");
     return response;
   }
+
+  for (i = 1; token_vector[i] && i < MAX_ARGS; i++) {
+    strcat(key, token_vector[i]);
+    if (strlen(key) > KEY_LEN - 1) {
+      sprintf(response, "Key too long.\n");
+      return response;
+    }
+  } 
 
   db_rec = find_db_ptr(key); 
   if (db_rec.block_offset != -1) {
@@ -939,11 +953,12 @@ char* read_command(char msg[]) {
   return response;
 }
 
-char* delete_command(char msg[]) {
+char* delete_command(char* token_vector[], int token_count){
 
   char* part            = NULL;
   char key[KEY_LEN]     = "";
   int length            = 0;
+  int i = 0;
   int retval;
   struct keydb_column *tuple = NULL;
   struct keydb_column *head = NULL;
@@ -954,15 +969,18 @@ char* delete_command(char msg[]) {
   response = malloc(sizeof(char) * MSG_SIZE);
   bzero(response, MSG_SIZE);
  
-  part = strtok(msg, "/");
+  if (token_count < 2) {
+    sprintf(response, "Not enough arguments.\n");
+    return response;
+  }
 
-  for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
+  for (i = 1; (part = token_vector[i]) && (i < MAX_ARGS); i++) {
     length += strlen(part);
     if (length > KEY_LEN - 1) {
-      sprintf(response, "Key too long.\n");
-      part = NULL;
-      break;
+      sprintf(response, "Key too large.\n");
+      return response;
     }
+
     // Save away the list of key composites
     if ((tmp = malloc(sizeof(struct keydb_column))) == NULL) {
       sprintf(response, "Delete failed.\n");
@@ -979,7 +997,6 @@ char* delete_command(char msg[]) {
       tuple = tuple->next;
       tuple->next = NULL;
     }
-    strcat(key, "/");
     strcat(key, part);
   } 
 
@@ -1011,11 +1028,12 @@ char* delete_command(char msg[]) {
   return response;
 }
 
-char* keys_command(char msg[]) {
+char* keys_command(char* token_vector[], int token_count) {
 
   char* part = NULL;
   char key[KEY_LEN] = "";
   int length = 0;
+  int i = 0;
   int retval;
   int64_t pos = 0;
   struct keydb_node *node;
@@ -1031,13 +1049,10 @@ char* keys_command(char msg[]) {
   response = malloc(sizeof(char) * MSG_SIZE);
   bzero(response, MSG_SIZE);
 
-  part = strtok(msg, "/");
-  
-  for (part = strtok(NULL, "\r\n/"); part; part = strtok(NULL, "\r\n/")) {
+  for (i = 1; (part = token_vector[i]) && (i < MAX_ARGS); i++) {
     length += strlen(part);
     if (length > KEY_LEN - 1) {
-      sprintf(response, "Key too long.\n");
-      part = NULL;
+      sprintf(response, "Key too large.\n");
       return response;
     }
 

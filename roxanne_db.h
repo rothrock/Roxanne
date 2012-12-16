@@ -75,6 +75,11 @@ THE SOFTWARE.
 #define KEYDB_LOCKS 1024
 #define MAX_ARGS 100
 
+struct response_struct {
+  unsigned int status;
+  char* msg;
+};
+
 
 struct idx { // structure for an index record.
   char      key[KEY_LEN];
@@ -123,7 +128,6 @@ int             IDX_FD;
 
 
 
-
 // Function signatures
 int       start_listening(char* host, char* port, int backlog);
 void      sigchld_handler(int s);
@@ -146,10 +150,10 @@ void      hash_write_lock(int hash_number);
 void      hash_write_unlock(int hash_number);
 void      cleanup_and_exit();
 void      usage(char *argv);
-char*     create_command(char* token_vector[], int token_count);
-char*     read_command(char* token_vector[], int token_count);
-char*     delete_command(char* token_vector[], int token_count);
-char*     keys_command(char* token_vector[], int token_count);
+struct response_struct create_command(char* token_vector[], int token_count);
+struct response_struct read_command(char* token_vector[], int token_count);
+struct response_struct delete_command(char* token_vector[], int token_count);
+struct response_struct keys_command(char* token_vector[], int token_count);
 int       keydb_insert(int fd, char column[], int64_t pos, bool go_next);
 void      keydb_lock(int64_t pos);
 void      keydb_unlock(int64_t pos);
@@ -159,3 +163,4 @@ void*     keydb_tree(int fd, int64_t pos, struct keydb_column **list);
 int       find_free_key_node(int keydb_fd);
 int       connect_and_add_node(int direction, struct keydb_node* buffer, char column[], int pos, int fd);
 int       new_subkey_tree(int fd, char column[], int64_t pos, struct keydb_node *buffer);
+int prepare_send_msg(struct response_struct response, char** send_msg);

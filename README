@@ -45,25 +45,37 @@ The database supports the notion of a composite key. That is, a key
 that is subdivided into a hierarchy that all keys participate in. The key-
 space is similar to a typical Unix filesystem organized into directories.
 
-To work with hierarchical keys, divide them with slashes '/'. The last
-element becomes the value. Like so:
+To work with hierarchical keys, divide them with spaces ' '. The last
+element becomes the value. The 'value' does not participate in the 
+key-space.
 
-/a/b/c/my_value
+The commands
 
-The keys are grouped into a tree of subdirectories:
-    /
-     a/
-       b/
-         c/
+create finance accounting payroll employees 50
+create finance accounting receivables employees 70
 
+Creates a 4-level hierarchy:
+    
+    1   2   3   4
+    finance
+        accounting
+            payroll
+                employees
+            receivables
+                employees
+            
+        
 The key-space then becomes a kind of database on its own. A client
 can query the database for all the subkeys of a path. This gives clients
 building blocks for range queries and ordered (sorted) results.
 
+Nodes in the key-space are reference-counted so that repeating groups
+in the hierarchy don't waste space.
+
 All lookups of values are still done via hashmap of the entire key. In 
-other words, values can only be fetched by providing the entire key.
-In this case, the hash-lookup key is '/a/b/c' which points to a starting
-block in the db that contains 'my_value'.
+other words, values can only be fetched by providing THE ENTIRE KEY.
+In this case, the hash-lookup key is 'finance accounting payroll employees'.
+It points to a starting block in the db that contains '50'.
  
 This means that point-lookups of records will always be very fast, but that
 the operator can use the key-space to organize and sort results.
@@ -75,65 +87,69 @@ Usage Example
 --------------
 madison:Roxanne rothrock$ sudo dbr_ctl start
 Started listening.
-madison:Roxanne rothrock$ telnet localhost 4080
-Trying ::1...
+carp:Roxanne rothrock$ telnet localhost 4080
+Trying 127.0.0.1...
 Connected to localhost.
 Escape character is '^]'.
-create /alpha/The first record
+create alpha record_1
+STATUS: OK
+SIZE: 9
 Write OK.
-read /alpha
-The first record
-create /alpha/beta/record
+
+create alpha beta record_2
+STATUS: OK
+SIZE: 9
 Write OK.
-read /alpha/beta
-record
-delete /alpha
-Delete OK.
-read /alpha
-Not found.
-read /alpha/beta
-record
+
+read alpha
+STATUS: OK
+SIZE: 8
+record_1
+
+read alpha beta
+STATUS: OK
+SIZE: 8
+record_2
 
 ...Now a demonstration of the 'keys' command:
 
-create /alpha/phi/record
+create alpha gamma record_3
+STATUS: OK
+SIZE: 9
 Write OK.
-create /alpha/1/record 
+
+create alpha delta record_4
+STATUS: OK
+SIZE: 9
 Write OK.
-create /alpha/zeta/record
-Write OK.
-keys /alpha
-1
-beta
-phi
-zeta
+
+keys alpha
+STATUS: OK
+SIZE: 16
+beta delta gamma
 
 
 --------------
 Protocol
 --------------
 
-Data manipulation commands are comprised of:
-
-   a keyword, 
-   a space, and 
-   a forward-slash.
-
 Data manipulation commands:
 
-  create /key[/key].../value<newline>
+  create key [key]...value<newline>
 
-  read /key[/key]...
+  read key [key]...<newline>
 
-  delete /key[/key]...
+  delete key [key]...<newline>
 
-  keys /[key][/key]....
+  keys [key] [key]....<newline>
 
 
 Other commands:
 
   quit
 
+Response:
+"STATUS: <status string>\nSIZE: <integer>\n<integer> long string of bytes\n\n"
 
 --------------
 On Disk
@@ -194,13 +210,13 @@ the append occurred.
 #### The keydb (/var/roxanne/keydb)
 
 Initially sized at 0 bytes, the keydb stores the composite key hierarchy.
-Each level of the hierarchy is a simple, binary tree of the
+Each level of the hierarchy is stored as a binary tree.
 
 Each node in the hierarchy has: a key-part, a left pointer (less-than),
 a right pointer (greater-than), and a next pointer that points to the
 next level in the hierarchy. 
 
-Nodes have a reference count, so duplicate key-parts don't require
+Nodes have a reference count so that duplicate key-parts don't require
 additional space. Unfortunately, the database does not yet support
 reclamation of keydb nodes with a reference count of 0.
 
@@ -208,8 +224,8 @@ reclamation of keydb nodes with a reference count of 0.
 
 Consider the following two composite keys (values left off):
 
-/foo/bar/toast
-/foo/bar/jam
+foo bar toast
+foo bar jam
 
 This set of two composite keys comprises 4 nodes in the keydb, stored
 like so:
@@ -223,10 +239,10 @@ jam       1           NULL          NULL          NULL
 
 
 Next, add these composite keys (again, values left off).
-/foo/bar/whiskey
-/zen
-/zoo
-/egg
+foo bar whiskey
+zen
+zoo
+egg
 
 The table now looks like this:
 

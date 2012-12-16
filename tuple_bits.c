@@ -83,8 +83,8 @@ void* keydb_tree(int fd, int64_t pos, struct keydb_column **list) {
   if (buffer == NULL) return NULL;
 
   if ((mid = malloc(sizeof(struct keydb_column))) == NULL) {
-    perror("Call to malloc() failed in keydb_tree.\n");
-    return NULL;
+    perror(NULL);
+    cleanup_and_exit;
   }
   mid->next = NULL;
 

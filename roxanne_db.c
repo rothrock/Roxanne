@@ -28,7 +28,7 @@ char DATA_HOME[4096] = "/var/roxanne";
 int main(int argc, char* argv[]) {
 
   struct sockaddr incoming;
-  socklen_t addr_size = sizeof(incoming); 
+  socklen_t addr_size = sizeof(incoming);
   int listen_fd, accept_fd;
   char* port = "4080";
   char* host = "::1";
@@ -72,7 +72,7 @@ int main(int argc, char* argv[]) {
   sprintf(db_file, "%s/db", DATA_HOME);
   sprintf(idx_file, "%s/idx", DATA_HOME);
   sprintf(block_bitmap_file, "%s/block_bitmap", DATA_HOME);
-  
+
 
   // Used to coordinate exclusive access to the block bitmap.
   if ((BLOCK_BITMAP_LOCK = sem_open("block_bitmap_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
@@ -95,7 +95,7 @@ int main(int argc, char* argv[]) {
   }
   sem_post(IDX_APPEND_LOCK);
 
-  // Used to coordinate exclusive access to the bitmap array of hash key space locks. 
+  // Used to coordinate exclusive access to the bitmap array of hash key space locks.
   if ((HASHBUCKET_LOCK = sem_open("hashbucket_lock", O_CREAT, 0666, 1)) == SEM_FAILED) {
     perror("semaphore init failed");
     exit(-1);
@@ -113,27 +113,27 @@ int main(int argc, char* argv[]) {
     perror("Problem mmapping the block bitmap");
     exit(-1);
   }
-  
+
   // A mem-mapped block of anonymous memory used to lock parts of the database index.
   // See hash_write_lock() and hash_write_unlock()
   if ((SHM_HASHBUCKET_BITMAP = mmap((caddr_t)0, ((1<<HASH_BITS)/8), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0)) == MAP_FAILED) {
     perror("Problem mmapping the hash bitmap");
     exit(-1);
   }
-  
+
   // A mem-mapped block of anonymous memory used to lock parts of the keydb tree.
   // See keydb_lock() and keydb_unlock()
   if ((SHM_KEYDB_BITMAP = mmap((caddr_t)0, ((KEYDB_LOCKS)/8), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0)) == MAP_FAILED) {
     perror("Problem mmapping the keydb lock bitmap");
     exit(-1);
   }
-  
+
   // register a function to reap our dead children
-  signal(SIGCHLD, sigchld_handler); 
+  signal(SIGCHLD, sigchld_handler);
 
   // Register a function to kill our children.
   // We'll unregister this function in our children.
-  signal(SIGTERM, sigterm_handler_parent); 
+  signal(SIGTERM, sigterm_handler_parent);
 
   // Open our database file
   if ((DB_FD = open(db_file, O_RDWR | O_CREAT, 0666)) == -1) {
@@ -175,7 +175,7 @@ int main(int argc, char* argv[]) {
 
   fprintf(stderr, "Started listening.\n");
 
-  while (1) {  
+  while (1) {
 
     // Accept new connection.
     if ((accept_fd = accept(listen_fd, (struct sockaddr *)&incoming, &addr_size)) == -1) {
@@ -227,7 +227,7 @@ void cleanup_and_exit() {
   sem_post(HASHBUCKET_LOCK);
   msync(SHM_BLOCK_BITMAP, BLOCK_BITMAP_BYTES, MS_SYNC);
   close(IDX_FD);
-  close(DB_FD); 
+  close(DB_FD);
   exit(0);
 }
 
@@ -276,7 +276,7 @@ int tokenize_command(char* msg, char* token_vector[]) {
   int i = 0;
   for (token_ptr = token_vector; (*token_ptr = strsep(&msg, " ")) != NULL;)
     if (**token_ptr != '\0') {
-        i++; 
+        i++;
         if (++token_ptr >= &token_vector[MAX_ARGS])
           return -1;
     }
@@ -286,11 +286,11 @@ int tokenize_command(char* msg, char* token_vector[]) {
 
 int extract_command(char *token_vector[], int token_count) {
 
-  char* commands[5] = { "quit",   // 0 
-                        "create", // 1     
-                        "read",   // 2     
-                        "delete", // 3     
-                        "keys"    // 4     
+  char* commands[5] = { "quit",   // 0
+                        "create", // 1
+                        "read",   // 2
+                        "delete", // 3
+                        "keys"    // 4
                       };
   int i = 0;
   if (token_count < 1) return -1;
@@ -306,7 +306,7 @@ void release_block_reservation(int block_offset, int blocks_used) {
 
   sem_wait(BLOCK_BITMAP_LOCK);
 
-  for (j = 0; j < blocks_used; j++) bit_array_clear(SHM_BLOCK_BITMAP, block_offset + j);  
+  for (j = 0; j < blocks_used; j++) bit_array_clear(SHM_BLOCK_BITMAP, block_offset + j);
 
   sem_post(BLOCK_BITMAP_LOCK);
 
@@ -322,10 +322,10 @@ int create_block_reservation(int blocks_needed) {
   sem_wait(BLOCK_BITMAP_LOCK);
 
   for (j = 0; j < MAX_BLOCKS; j++) {
-    for (i = 0; i < blocks_needed; i++) { 
+    for (i = 0; i < blocks_needed; i++) {
       if (bit_array_test(SHM_BLOCK_BITMAP, i + j) != 0) {// didn't find a contiguous block
         j += i;
-        break; 
+        break;
       }
     }
     if (i == blocks_needed) {
@@ -368,7 +368,7 @@ struct db_ptr find_db_ptr(char* key) {
     if (result < IDX_ENTRY_SIZE) { // Somehow the read failed.
       perror("index read failed in function find_db_ptr");
       return db_rec;
-    } 
+    }
 
     if ((memcmp(key, index_rec.key, KEY_LEN)) == 0)  {// found a match
       db_rec.block_offset = index_rec.block_offset;
@@ -377,7 +377,7 @@ struct db_ptr find_db_ptr(char* key) {
     }
 
     if ((pos = index_rec.next) == 0) return db_rec; // return if no next record. Otherwise, keep looping.
-    
+
   }
 
 }
@@ -401,7 +401,7 @@ int find(char* key) {
     if (result < IDX_ENTRY_SIZE) { // Somehow the read failed.
       perror("index read failed in function find");
       return -1;
-    } 
+    }
 
     if ((memcmp(key, index_rec.key, KEY_LEN)) == 0)  return pos; // found
 
@@ -410,8 +410,8 @@ int find(char* key) {
   }
 
 }
-  
-  
+
+
 int write_index(char* key, int block_offset, int length) {
 
   int         hash_id = get_hash_val(HASH_BITS, key);
@@ -434,7 +434,7 @@ int write_index(char* key, int block_offset, int length) {
 
   while (1) {
     result = pread(IDX_FD, (void*)index_rec_ptr, IDX_ENTRY_SIZE, pos);
-    
+
     if (result == 0) {
       fprintf(stderr, "EOF encoutered unexpectedly.\n");
       return -1;
@@ -443,7 +443,7 @@ int write_index(char* key, int block_offset, int length) {
     if (result < IDX_ENTRY_SIZE) { // Somehow the read failed.
       perror("index read failed in function write_index");
       return -1;
-    } 
+    }
 
     // Determine if we can write on this index record, or do we need
     // to start looking down the chain.
@@ -456,7 +456,7 @@ int write_index(char* key, int block_offset, int length) {
       pwrite(IDX_FD, (void*)index_rec_ptr, IDX_ENTRY_SIZE, pos); // write our key here.
       return 0;
     }
-      
+
     // Since we are here, the test above failed. The current index record is in use.
     // If the 'next' pointer is 0, we can just create a new index record for ourself.
     if (index_rec.next == 0) { // no next index record in the chain. create one.
@@ -503,14 +503,14 @@ char* read_record(struct db_ptr db_rec) {
   }
 
   bzero(buffer, byte_count);
-  
+
   // write to the appropriate location in our file
   if ((bytes_read = pread(DB_FD, (void*)buffer, byte_count, byte_offset)) == -1) {
     perror("pread failed in read_record");
     free(buffer);
     return NULL;
   }
-  
+
   return buffer;
 }
 
@@ -524,7 +524,7 @@ int delete_record(char* key) {
   int         result;
   struct idx  index_rec;
   int         hash_id = get_hash_val(HASH_BITS, key);
-  
+
   // lock this part of the key-space to make the delete atomic.
   // No one can be creating this key while we are deleting it.
   hash_write_lock(hash_id);
@@ -563,14 +563,14 @@ int delete_record(char* key) {
   byte_offset = index_rec.block_offset * BLOCK_SIZE;
 
   // Make a temporary, zero-padded buffer that is at least as big as the
-  // data payload that we need to erase. 
+  // data payload that we need to erase.
   if ((buffer = malloc(byte_count)) == NULL) {
     perror("malloc failed in delete_record()");
     return(-1);
   }
 
   bzero(buffer, byte_count);
-  
+
   // write the zeros to the appropriate location in our file.
   if ((pwrite(DB_FD, buffer, byte_count, byte_offset)) == -1) {
     perror("pwrite failed in delete_record");
@@ -595,9 +595,9 @@ int write_record(char* key, char* value) {
   int       block_offset;
   int64_t   byte_offset;
   int       index_result;
-  int       hash_id = get_hash_val(HASH_BITS, key); 
+  int       hash_id = get_hash_val(HASH_BITS, key);
   int       find_result;
-  
+
   // lock this part of the key-space to make the write atomic.
   hash_write_lock(hash_id);
 
@@ -608,7 +608,7 @@ int write_record(char* key, char* value) {
 
   // Figure out how many blocks we need and then requisition
   // them from the block bitmap table.
-  if (qnr.rem > 0) blocks++; // round up to the next whole block.  
+  if (qnr.rem > 0) blocks++; // round up to the next whole block.
   if ((block_offset = create_block_reservation(blocks)) == -1) {
     fprintf(stderr, "Failed to reserve space in the block bitmap.\n");
     hash_write_unlock(hash_id);
@@ -630,7 +630,7 @@ int write_record(char* key, char* value) {
 
   bzero(buffer, byte_count);
   memcpy(buffer, value, len);
-  
+
   // write to the appropriate location in our file
   if ((pwrite(DB_FD, buffer, byte_count, byte_offset)) == -1) {
     perror("pwrite failed in write_record");
@@ -652,10 +652,10 @@ int write_record(char* key, char* value) {
 
   return 0;
 }
-  
+
 
 int guts(int accept_fd, int listen_fd) {
-  
+
   char buffer[RECV_WINDOW] = "";   // recv buffer
   int msgbuflen = MSG_SIZE;
   char status_msg[MSG_SIZE];
@@ -663,10 +663,10 @@ int guts(int accept_fd, int listen_fd) {
   char *send_msg; // Outgoing message.
   char *tmp_msg;
   void *msg_cursor;
-  struct response_struct response;   
+  struct response_struct response;
   int msglen = 0; // length of the assembled message that we receive.
   int recvlen = 0; // how many bytes recv call returns.
-  int responselen = 0;   
+  int responselen = 0;
   int offset;
   int retval;
   char* token_vector[MAX_ARGS] = {'\0'};
@@ -724,7 +724,7 @@ int guts(int accept_fd, int listen_fd) {
       msg_cursor += recvlen;
       if (memchr((void*)buffer, '\n', recvlen)) break; // Got a terminator character. Go process our message.
 
-    } 
+    }
 
     tmp_msg = msg;
     strsep(&tmp_msg, "\r\n");
@@ -756,11 +756,11 @@ int guts(int accept_fd, int listen_fd) {
       default:
         if ((response.msg = malloc(sizeof(char) * MSG_SIZE)) == NULL) {
           perror(NULL);
-          cleanup_and_exit; 
+          cleanup_and_exit;
         }
         bzero(response.msg, MSG_SIZE);
         sprintf(response.msg, "Unknown command.");
-        response.status = 1;      
+        response.status = 1;
     }
 
     responselen = prepare_send_msg(response, &send_msg);
@@ -911,7 +911,7 @@ struct response_struct create_command(char* token_vector[], int token_count) {
 
     }
     previous_part = part;
-  } 
+  }
 
   if (key[0] == '\0') {
     response.status = 1;
@@ -975,9 +975,9 @@ struct response_struct read_command(char* token_vector[], int token_count) {
       response.status = 1;
       return response;
     }
-  } 
+  }
 
-  db_rec = find_db_ptr(key); 
+  db_rec = find_db_ptr(key);
   if (db_rec.block_offset != -1) {
     value = read_record(db_rec);
     responselen = strlen(value);
@@ -1044,7 +1044,7 @@ struct response_struct delete_command(char* token_vector[], int token_count){
       tuple->next = NULL;
     }
     strcat(key, part);
-  } 
+  }
 
   if (length == 0) {
     response.status = 1;
@@ -1068,7 +1068,7 @@ struct response_struct delete_command(char* token_vector[], int token_count){
   } else {
     response.status = 1;
     sprintf(response.msg, "Could not delete record.");
-  } 
+  }
 
   while (head) { // free our list of key composites.
     tmp = head->next;
@@ -1089,7 +1089,7 @@ struct response_struct keys_command(char* token_vector[], int token_count) {
   struct keydb_node *node;
   struct keydb_column *list, *tmp, *cursor;
   bool some_content = false; // Does our key list have any keys in it?
-  list = NULL; 
+  list = NULL;
   char* tmp_response;
   int response_free_bytes = MSG_SIZE;
   int responselen = 0;
@@ -1112,19 +1112,19 @@ struct response_struct keys_command(char* token_vector[], int token_count) {
     }
 
     node = keydb_find(KEYDB_FD, part, pos);
-    
+
     if (!(node = keydb_find(KEYDB_FD, part, pos))) {
       response.status = 1;
       sprintf(response.msg, "Not found.");
       return response;
-    } 
+    }
 
     if (node->refcount <= 0) {
       response.status = 1;
       sprintf(response.msg, "Not found.");
       return response;
-    } 
-  
+    }
+
     pos = node->next;
     free(node);
     if (pos == 0) { // There is no next subtree.
@@ -1157,7 +1157,7 @@ struct response_struct keys_command(char* token_vector[], int token_count) {
     free(list);
     list = tmp;
   }
-  
+
   if (!some_content) {
     sprintf(response.msg, "No subkeys.");
     response.status = 1;
@@ -1180,7 +1180,7 @@ int keydb_txlog_reset() {
   char log_file[4096];
 
   snprintf(log_file, (4096 - sizeof(int)), "%s/%d.txlog", DATA_HOME, pid);
-  
+
  if ((retval = open(log_file, O_TRUNC | O_APPEND | O_CREAT, 0666)) == -1) {
       fprintf(stderr, "Couldn't open tx_log %s\n", log_file);
       perror(NULL);

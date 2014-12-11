@@ -28,7 +28,7 @@ void keydb_unlock(int64_t pos) {
   sprintf(key, "%llu", pos); // turn pos into a string.
   hash_number = get_hash_val(10, key); // 2^10 = 1024. See SHM_KEYDB_BITMAP.
 
-  sem_wait(KEYDB_LOCK); 
+  sem_wait(KEYDB_LOCK);
   bit_array_clear(SHM_KEYDB_BITMAP, hash_number);
   sem_post(KEYDB_LOCK);
 
@@ -67,11 +67,11 @@ struct keydb_node* key_buf_read(int fd, int64_t pos) {
   return buffer;
 }
 
-  
+
 void* keydb_tree(int fd, int64_t pos, struct keydb_column **list) {
   // Return a linked list of keys (stored as struct keydb_column)
   // found in the tree pointed at by pos. The caller must free the list.
-  
+
   struct keydb_node* parent;
   struct keydb_node* buffer;
   struct keydb_column *mid = NULL;
@@ -100,7 +100,7 @@ void* keydb_tree(int fd, int64_t pos, struct keydb_column **list) {
 
   // Middle
   mid->next = *list;
-  *list = mid; 
+  *list = mid;
 
   // Left
   if (buffer->left  != 0) keydb_tree(fd, buffer->left, list);
@@ -131,15 +131,15 @@ struct keydb_node* keydb_find(int fd, char *key, int64_t pos) {
   } else if (cmp < 0) { // Go right
     pos = buffer->right;
     free(buffer);
-    if (pos != 0)  return(keydb_find(fd, key, pos)); 
+    if (pos != 0)  return(keydb_find(fd, key, pos));
   } else { // Go left
     pos = buffer->left;
     free(buffer);
     if (pos != 0) return(keydb_find(fd, key, pos));
   }
-     
+
   return NULL;
-}  
+}
 
 int composite_delete(int fd, struct keydb_column *tuple) {
   // Reduces the refcounts of the given list of key components into the keydb.
@@ -173,7 +173,7 @@ int composite_delete(int fd, struct keydb_column *tuple) {
       free(node);
     };
     keydb_unlock(pos);
-    pos = node->next;  
+    pos = node->next;
     tuple = tuple->next;
     free(node);
 
@@ -181,7 +181,7 @@ int composite_delete(int fd, struct keydb_column *tuple) {
 
   //sem_post(KEYDB_LOCK);
   return 0;
-}    
+}
 
 
 int composite_insert(int fd, struct keydb_column *tuple) {
@@ -197,7 +197,7 @@ int composite_insert(int fd, struct keydb_column *tuple) {
   if (pos == -1) {
     return -1;
   }
-  tuple = tuple->next;  
+  tuple = tuple->next;
 
   while (tuple) {
     keydb_lock(pos);
@@ -211,7 +211,7 @@ int composite_insert(int fd, struct keydb_column *tuple) {
   };
 
   return 0;
-}    
+}
 
 
 int new_subkey_tree(int fd, char column[], int64_t pos, struct keydb_node *buffer) {
@@ -229,7 +229,7 @@ int new_subkey_tree(int fd, char column[], int64_t pos, struct keydb_node *buffe
     perror("pwrite() failed in new_subkey_tree.");
     free(buffer);
     return -1;
-  }  
+  }
   bzero(buffer, sizeof(struct keydb_node));
   strcpy(buffer->column, column);
   buffer->refcount = 1;
@@ -246,8 +246,8 @@ int new_subkey_tree(int fd, char column[], int64_t pos, struct keydb_node *buffe
 
 int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
   // inserts a node in the keydb tree. The go_next flag determines
-  // whether or not the key goes into the binary tree pointed at by 
-  // the record stored at pos, or instead into the 'next' binary 
+  // whether or not the key goes into the binary tree pointed at by
+  // the record stored at pos, or instead into the 'next' binary
   // tree pointed at by the record at pos.
   // returns the offset in the file where the insert occurred.
 
@@ -292,7 +292,7 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
   //Since we're here, We should write our node into this particular tree. (go_next is false).
 
   if (n == 0) { // nothing here. zero-length file. Just write and leave.
-    
+
     memcpy(buffer->column, column, KEY_LEN);
     buffer->refcount = 1;
     buffer->pos = pos;
@@ -308,7 +308,7 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
   // Start looking for a place to insert our new node
 
   comparison = strcmp(buffer->column, column);
-  
+
   if (comparison > 0) { // node on disk is bigger, we need to go left.
 
     if (buffer->left != 0) { // need to keep going left.
@@ -346,9 +346,9 @@ int keydb_insert(int fd, char column[], int64_t pos, bool go_next) {
     }
     free(buffer);
     return pos;
-  
+
   }
-  
+
   return 0;
 }
 
@@ -376,7 +376,7 @@ int find_free_key_node(int fd) {
 };
 
 int keydb_txlog_append(int64_t pos) {
-  
+
   return 0;
 }
 
@@ -415,4 +415,3 @@ int connect_and_add_node(int direction, struct keydb_node* buffer, char column[]
   free(buffer);
   return next_pos;
 }
-

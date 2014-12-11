@@ -20,8 +20,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -159,8 +157,8 @@ void      keydb_lock(int64_t pos);
 void      keydb_unlock(int64_t pos);
 int       composite_insert(int KEYDB_FD, struct keydb_column *tuple);
 struct    keydb_node* keydb_find(int fd, char *key, int64_t pos);
-void*     keydb_tree(int fd, int64_t pos, struct keydb_column **list); 
+void*     keydb_tree(int fd, int64_t pos, struct keydb_column **list);
 int       find_free_key_node(int keydb_fd);
 int       connect_and_add_node(int direction, struct keydb_node* buffer, char column[], int pos, int fd);
 int       new_subkey_tree(int fd, char column[], int64_t pos, struct keydb_node *buffer);
-int prepare_send_msg(struct response_struct response, char** send_msg);
+int       prepare_send_msg(struct response_struct response, char** send_msg);

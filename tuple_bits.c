@@ -84,7 +84,7 @@ void* keydb_tree(int fd, int64_t pos, struct keydb_column **list) {
 
   if ((mid = malloc(sizeof(struct keydb_column))) == NULL) {
     perror(NULL);
-    cleanup_and_exit;
+    cleanup_and_exit(0);
   }
   mid->next = NULL;
 
@@ -369,10 +369,9 @@ int find_free_key_node(int fd) {
         perror("pwrite() failed in find_free_key_node.");
         return -1;
       }
-      return pos;
     }
   }
-
+	return pos;
 };
 
 int keydb_txlog_append(int64_t pos) {

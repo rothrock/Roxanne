@@ -218,17 +218,17 @@ void sigterm_handler_child(int s)
 {
   // Clean up and exit.
   fprintf(stderr, "Got signal %d\n", s);
-  cleanup_and_exit();
+  cleanup_and_exit(0);
 }
 
-void cleanup_and_exit() {
+void cleanup_and_exit(int retval) {
   sem_post(BLOCK_BITMAP_LOCK);
   sem_post(IDX_APPEND_LOCK);
   sem_post(HASHBUCKET_LOCK);
   msync(SHM_BLOCK_BITMAP, BLOCK_BITMAP_BYTES, MS_SYNC);
   close(IDX_FD);
   close(DB_FD);
-  exit(0);
+  exit(retval);
 }
 
 int start_listening(char* host, char* port, int backlog) {
@@ -242,7 +242,7 @@ int start_listening(char* host, char* port, int backlog) {
   hints.ai_socktype = SOCK_STREAM;  // Normal TCP/IP reliable, buffered I/O.
 
   // Use getaddrinfo to allocate and populate *res.
-  if (rc = getaddrinfo(host, port, &hints, &res) != 0) { // Flesh out res. We use *res to supply the needed args to socket() and bind().
+  if ((rc = getaddrinfo(host, port, &hints, &res)) != 0) { // Flesh out res. We use *res to supply the needed args to socket() and bind().
     fprintf(stderr, "The getaddrinfo() call failed with %d\n", rc);
     return(-1);
   }
@@ -669,7 +669,8 @@ int guts(int accept_fd, int listen_fd) {
   int responselen = 0;
   int offset;
   int retval;
-  char* token_vector[MAX_ARGS] = {'\0'};
+  //char* token_vector[MAX_ARGS] = {'\0'};
+  char* token_vector[MAX_ARGS] = {NULL};
   int token_count = 0;
 
   // Re-register the sigterm handler to our cleanup function.
@@ -734,7 +735,7 @@ int guts(int accept_fd, int listen_fd) {
     switch (extract_command(token_vector, token_count))  {
 
       case 0: // quit
-        cleanup_and_exit();
+        cleanup_and_exit(0);
         break;
 
       case 1: // create
@@ -756,7 +757,7 @@ int guts(int accept_fd, int listen_fd) {
       default:
         if ((response.msg = malloc(sizeof(char) * MSG_SIZE)) == NULL) {
           perror(NULL);
-          cleanup_and_exit;
+          cleanup_and_exit(0);
         }
         bzero(response.msg, MSG_SIZE);
         sprintf(response.msg, "Unknown command.");
@@ -785,7 +786,7 @@ int prepare_send_msg(struct response_struct response, char** send_msg) {
   responselen = strlen(response.msg) + strlen(status_msg) + 2;
   if ((*send_msg = malloc(responselen)) == NULL) {
     perror(NULL);
-    cleanup_and_exit();
+    cleanup_and_exit(0);
   }
   *send_msg[0] = '\0';
   strcat(*send_msg, status_msg);
@@ -872,7 +873,7 @@ struct response_struct create_command(char* token_vector[], int token_count) {
 
   if ((response.msg = malloc(sizeof(char) * MSG_SIZE)) == NULL) {
     perror(NULL);
-    cleanup_and_exit();
+    cleanup_and_exit(0);
   }
   bzero(response.msg, MSG_SIZE);
 
@@ -895,7 +896,7 @@ struct response_struct create_command(char* token_vector[], int token_count) {
       // Save away the list of key composites
       if ((tmp = malloc(sizeof(struct keydb_column))) == NULL) {
         perror(NULL);
-        cleanup_and_exit;
+        cleanup_and_exit(0);
       }
       strncpy(tmp->column, previous_part, KEY_LEN);
       tmp->next = NULL;
@@ -1011,7 +1012,7 @@ struct response_struct delete_command(char* token_vector[], int token_count){
 
   if ((response.msg = malloc(sizeof(char) * MSG_SIZE)) == NULL) {
     perror(NULL);
-    cleanup_and_exit();
+    cleanup_and_exit(0);
   }
 
   if (token_count < 2) {
@@ -1031,7 +1032,7 @@ struct response_struct delete_command(char* token_vector[], int token_count){
     // Save away the list of key composites
     if ((tmp = malloc(sizeof(struct keydb_column))) == NULL) {
       perror(NULL);
-      cleanup_and_exit();
+      cleanup_and_exit(0);
     }
     strncpy(tmp->column, part, KEY_LEN);
     tmp->next = NULL;
@@ -1099,7 +1100,7 @@ struct response_struct keys_command(char* token_vector[], int token_count) {
   response.status = 0;
   if ((response.msg = malloc(sizeof(char) * MSG_SIZE)) == NULL) {
     perror(NULL);
-    cleanup_and_exit();
+    cleanup_and_exit(0);
   }
   bzero(response.msg, MSG_SIZE);
 
